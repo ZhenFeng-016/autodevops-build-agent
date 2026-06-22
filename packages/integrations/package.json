@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "dependencies": {
-    "@zhenfengxx/contracts": "1.1.0",
+    "@zhenfengxx/contracts": "1.1.1",
     "uuid": "^14.0.0"
   },
   "scripts": {

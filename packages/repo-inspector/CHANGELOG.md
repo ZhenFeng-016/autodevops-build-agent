@@ -1,5 +1,13 @@
 # @zhenfengxx/repo-inspector
 
+## 1.1.1
+
+### Patch Changes
+
+- 2509eb5: Declare the MIT license for every public package and include the repository license in published artifacts.
+- Updated dependencies [2509eb5]
+  - @zhenfengxx/contracts@1.1.1
+
 ## 1.1.0
 
 ### Minor Changes

@@ -1,5 +1,11 @@
 # @zhenfengxx/build-agent
 
+## 1.1.1
+
+### Patch Changes
+
+- 2509eb5: Declare the MIT license for every public package and include the repository license in published artifacts.
+
 ## 1.1.0
 
 ### Minor Changes

@@ -1,6 +1,6 @@
 {
   "name": "@zhenfengxx/repo-inspector",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Repository and runtime-contract inspection for AutoDevOps projects, including native Oak detection.",
   "license": "MIT",
   "repository": {
@@ -28,7 +28,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@zhenfengxx/contracts": "1.1.0",
+    "@zhenfengxx/contracts": "1.1.1",
     "uuid": "^14.0.0"
   }
 }
