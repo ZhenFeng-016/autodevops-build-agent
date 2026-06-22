@@ -12,6 +12,7 @@ const requiredPublishFragments = [
   'actions/setup-node@v6',
   'node-version: 24',
   'registry-url: https://registry.npmjs.org',
+  'package-manager-cache: false',
   'npm run ci',
   'npm run release:next',
 ];
@@ -22,7 +23,7 @@ for (const fragment of requiredPublishFragments) {
   }
 }
 
-for (const forbidden of ['NODE_AUTH_TOKEN', 'NPM_TOKEN', '_authToken', 'npm_token']) {
+for (const forbidden of ['NODE_AUTH_TOKEN', 'NPM_TOKEN', '_authToken', 'npm_token', 'cache: npm']) {
   if (publishWorkflow.includes(forbidden)) {
     throw new Error(`publish workflow must not use a long-lived npm credential: ${forbidden}`);
   }
