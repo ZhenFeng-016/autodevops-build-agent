@@ -1,0 +1,30 @@
+{
+  "name": "autodevops-build-agent-workspace",
+  "version": "1.0.1",
+  "private": true,
+  "description": "Versioned Agent protocol, SDK, repository inspector, and BuildAgent runtime for AutoDevOps.",
+  "type": "module",
+  "packageManager": "npm@11.5.1",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @zhenfengxx/contracts && npm run build -w @zhenfengxx/agent-sdk && npm run build -w @zhenfengxx/repo-inspector && npm run build -w @autodevops/codex-prompts && npm run build -w @autodevops/integrations && npm run build -w @zhenfengxx/build-agent",
+    "typecheck": "tsc -p tsconfig.base.json --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "check:packages": "node scripts/check-packages.mjs",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "ci": "npm run check:secrets && npm run typecheck && npm run build && npm test && npm run check:packages && npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release:next": "changeset publish --tag next"
+  },
+  "devDependencies": {
+    "@changesets/cli": "2.31.0",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

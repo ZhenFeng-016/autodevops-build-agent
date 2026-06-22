@@ -1,0 +1,23 @@
+# AutoDevOps BuildAgent
+
+Independent source repository for the public AutoDevOps Agent packages:
+
+- `@zhenfengxx/contracts`
+- `@zhenfengxx/agent-sdk`
+- `@zhenfengxx/repo-inspector`
+- `@zhenfengxx/build-agent`
+
+The repository owns the Agent protocol, authenticated API client, repository/runtime inspection, and the executable build-plane worker. The AutoDevOps control plane consumes released package versions and must not import this repository's source tree.
+
+## Local verification
+
+```bash
+npm ci
+npm run ci
+```
+
+## Versioning and release
+
+Every user-visible package change requires a Changeset. Merging the generated version PR updates package versions and changelogs. The manual `Publish npm packages` workflow publishes the already-versioned packages to the `next` tag through npm Trusted Publishing/OIDC. After clean-install and compatibility verification, maintainers promote the same version to `latest`.
+
+No npm password, recovery code, automation token, or `.npmrc` credential belongs in this repository or its GitHub settings. A granular automation token is permitted only as an explicitly approved fallback when OIDC is unavailable.

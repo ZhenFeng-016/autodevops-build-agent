@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "jsx": "react-jsx",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@zhenfengxx/contracts": ["packages/domain/src/index.ts"],
+      "@zhenfengxx/agent-sdk": ["packages/agent-sdk/src/index.ts"],
+      "@zhenfengxx/repo-inspector": ["packages/repo-inspector/src/index.ts"],
+      "@autodevops/codex-prompts": ["packages/codex-prompts/src/index.ts"],
+      "@autodevops/integrations": ["packages/integrations/src/index.ts"]
+    }
+  },
+  "include": [
+    "apps/**/*.ts",
+    "packages/**/*.ts",
+    "tests/**/*.ts"
+  ]
+}

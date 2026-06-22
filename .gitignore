@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.autodevops/
+.env
+.env.local
+coverage/
+*.log
+apps/*/dist/
+packages/*/dist/

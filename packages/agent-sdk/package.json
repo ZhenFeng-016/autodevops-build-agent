@@ -1,0 +1,18 @@
+{
+  "name": "@zhenfengxx/agent-sdk",
+  "version": "1.0.1",
+  "description": "Authenticated API client and signing helpers for AutoDevOps BuildAgents.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZhenFeng-016/autodevops-build-agent.git",
+    "directory": "packages/agent-sdk"
+  },
+  "type": "module",
+  "files": ["dist"],
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org" },
+  "scripts": { "build": "tsc -p tsconfig.json" },
+  "dependencies": { "@zhenfengxx/contracts": "1.0.1" }
+}

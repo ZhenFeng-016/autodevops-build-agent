@@ -1,0 +1,37 @@
+{
+  "name": "@zhenfengxx/build-agent",
+  "version": "1.0.1",
+  "description": "AutoDevOps build-plane worker for repository, Jenkins, and Codex jobs.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZhenFeng-016/autodevops-build-agent.git",
+    "directory": "apps/agent"
+  },
+  "type": "module",
+  "files": ["dist"],
+  "bin": {
+    "autodevops-agent": "dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/cli.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "node dist/cli.js",
+    "build": "node ../../scripts/build-agent-package.mjs"
+  },
+  "devDependencies": {
+    "@autodevops/codex-prompts": "0.1.0",
+    "@autodevops/integrations": "0.1.0",
+    "@zhenfengxx/agent-sdk": "1.0.1",
+    "@zhenfengxx/contracts": "1.0.1",
+    "@zhenfengxx/repo-inspector": "1.0.1"
+  }
+}
