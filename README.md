@@ -25,6 +25,7 @@ same version from a locally authenticated terminal. Authentication remains
 interactive and is never passed as a command argument:
 
 ```bash
+npm run release:verify -- 1.1.0
 npm run release:promote -- 1.1.0 --check
 npm run release:promote -- 1.1.0
 ```

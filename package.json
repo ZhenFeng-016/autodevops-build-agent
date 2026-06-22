@@ -19,7 +19,8 @@
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release:next": "changeset publish --tag next",
-    "release:promote": "node scripts/promote-latest.mjs"
+    "release:promote": "node scripts/promote-latest.mjs",
+    "release:verify": "node scripts/verify-published-release.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "2.31.0",
