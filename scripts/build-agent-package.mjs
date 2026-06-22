@@ -21,7 +21,7 @@ function resolveGitRevision() {
 rmSync(outdir, { recursive: true, force: true });
 mkdirSync(outdir, { recursive: true });
 await build({
-  entryPoints: [join(packageRoot, 'src', 'index.ts')],
+  entryPoints: [join(packageRoot, 'src', 'cli.ts')],
   outfile: join(outdir, 'cli.js'),
   bundle: true,
   platform: 'node',
