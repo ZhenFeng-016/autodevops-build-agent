@@ -1,6 +1,6 @@
 {
   "name": "@zhenfengxx/contracts",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Runtime-validated Agent/API DTOs and protocol schemas for AutoDevOps.",
   "repository": {
     "type": "git",
@@ -8,7 +8,9 @@
     "directory": "packages/domain"
   },
   "type": "module",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

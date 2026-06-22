@@ -1,6 +1,6 @@
 {
   "name": "@zhenfengxx/repo-inspector",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Repository and runtime-contract inspection for AutoDevOps projects, including native Oak detection.",
   "repository": {
     "type": "git",
@@ -8,14 +8,26 @@
     "directory": "packages/repo-inspector"
   },
   "type": "module",
-  "files": ["dist"],
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org" },
-  "scripts": { "build": "tsc -p tsconfig.json" },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
   "dependencies": {
-    "@zhenfengxx/contracts": "1.0.1",
+    "@zhenfengxx/contracts": "1.1.0",
     "uuid": "^14.0.0"
   }
 }
