@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-          cache: npm
+          package-manager-cache: false
       - name: Install OIDC-capable npm
         run: npm install --global npm@11.5.1
       - run: npm ci

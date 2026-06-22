@@ -15,6 +15,8 @@ check and external setting below has been verified against current state.
   and accepts deployments from protected branches only.
 - GitHub Actions is permitted to create version pull requests. No npm token is
   stored as an Actions or environment secret.
+- The publish workflow disables the package-manager cache so release builds do
+  not reuse dependency state from an earlier job.
 
 ## npm Trusted Publishers
 
