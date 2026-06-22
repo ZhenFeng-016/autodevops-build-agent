@@ -2,6 +2,7 @@
   "name": "@zhenfengxx/build-agent",
   "version": "1.1.0",
   "description": "AutoDevOps build-plane worker for repository, Jenkins, and Codex jobs.",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ZhenFeng-016/autodevops-build-agent.git",

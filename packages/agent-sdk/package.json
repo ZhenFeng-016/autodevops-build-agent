@@ -2,6 +2,7 @@
   "name": "@zhenfengxx/agent-sdk",
   "version": "1.1.0",
   "description": "Authenticated API client and signing helpers for AutoDevOps BuildAgents.",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ZhenFeng-016/autodevops-build-agent.git",
