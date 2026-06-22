@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { AgentClient, createWorkerSignature, verifyWorkerSignature } from '@zhenfengxx/agent-sdk';
 import {
@@ -20,7 +21,8 @@ test('Agent SDK HMAC signatures remain deterministic and timestamp guarded', () 
 
 test('packaged BuildAgent reports a versioned executable', () => {
   const output = execFileSync(process.execPath, ['apps/agent/dist/cli.js', '--version'], { encoding: 'utf8' }).trim();
-  assert.match(output, /^autodevops-agent 1\.0\.1\+[a-f0-9]{12}$/);
+  const manifest = JSON.parse(readFileSync('apps/agent/package.json', 'utf8')) as { version: string };
+  assert.match(output, new RegExp(`^autodevops-agent ${manifest.version.replace(/\./g, '\\.')}\\+[a-f0-9]{12}$`));
 });
 
 test('protocol v1 validates registration and negotiates capabilities', () => {
