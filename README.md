@@ -20,14 +20,18 @@ npm run ci
 
 Every user-visible package change requires a Changeset. Merging the generated version PR updates package versions and changelogs. The manual `Publish npm packages` workflow publishes the already-versioned packages to the `next` tag through npm Trusted Publishing/OIDC.
 
+Repository protection, npm Trusted Publisher fields, version PR handling, OIDC
+proof, clean-install verification, and recovery procedures are defined in
+[`docs/RELEASE.md`](docs/RELEASE.md).
+
 After clean-install and compatibility verification, check and promote the exact
 same version from a locally authenticated terminal. Authentication remains
 interactive and is never passed as a command argument:
 
 ```bash
-npm run release:verify -- 1.1.0
-npm run release:promote -- 1.1.0 --check
-npm run release:promote -- 1.1.0
+npm run release:verify -- <version>
+npm run release:promote -- <version> --check
+npm run release:promote -- <version>
 ```
 
 The promotion command refuses to proceed unless all four `next` tags already

@@ -33,9 +33,15 @@ try {
     if (manifest.publishConfig?.access !== 'public' || manifest.publishConfig?.registry !== 'https://registry.npmjs.org') {
       throw new Error(`${name} is missing the public npmjs publish policy`);
     }
+    if (manifest.license !== 'MIT') {
+      throw new Error(`${name} must declare the MIT license`);
+    }
     const packed = JSON.parse(execFileSync(process.execPath, [npmCli, 'pack', '-w', name, '--json', '--pack-destination', destination], { encoding: 'utf8' }))[0];
     if (!packed?.files?.length || !packed.files.some((entry) => entry.path.startsWith('dist/'))) {
       throw new Error(`${name} pack output is missing dist files`);
+    }
+    if (!packed.files.some((entry) => entry.path === 'LICENSE')) {
+      throw new Error(`${name} pack output is missing LICENSE`);
     }
     const forbidden = packed.files.map((entry) => entry.path).filter((path) => forbiddenPath.test(path));
     if (forbidden.length) throw new Error(`${name} contains forbidden package files: ${forbidden.join(', ')}`);
