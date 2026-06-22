@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "dependencies": {
-    "@zhenfengxx/contracts": "1.0.1"
+    "@zhenfengxx/contracts": "1.0.1",
+    "uuid": "^14.0.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json"

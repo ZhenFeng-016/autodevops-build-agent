@@ -1,5 +1,21 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { BuildAgent, ClaimedJob, JobEvent } from '@zhenfengxx/contracts';
+import {
+  AgentClaimRequestSchema,
+  AgentHeartbeatRequestSchema,
+  AgentRegistrationRequestSchema,
+  JobCompleteRequestSchema,
+  JobEventRequestSchema,
+  JobFailRequestSchema,
+  type AgentClaimRequest,
+  type AgentHeartbeatRequest,
+  type AgentRegistrationRequest,
+  type BuildAgent,
+  type ClaimedJob,
+  type JobCompleteRequest,
+  type JobEvent,
+  type JobEventRequest,
+  type JobFailRequest,
+} from '@zhenfengxx/contracts';
 
 export type AgentCredentials = { agentId: string; secret?: string; token?: string };
 export type WorkerSignatureInput = { method: string; path: string; timestamp: string; rawBody: string; secret: string };
@@ -42,12 +58,29 @@ export class AgentClient {
     this.baseUrl = baseUrl.replace(/\/$/, '');
   }
 
-  register(agent: Partial<BuildAgent>) { return this.request<BuildAgent>('/build-agents/register', 'POST', agent); }
-  heartbeat(agent: Partial<BuildAgent>) { return this.request<BuildAgent>(`/build-agents/${encodeURIComponent(this.credentials.agentId)}/heartbeat`, 'POST', agent); }
-  claimJob(input: { leaseSeconds?: number; capabilities?: string[] }) { return this.request<ClaimedJob | { claimed: false }>(`/build-agents/${encodeURIComponent(this.credentials.agentId)}/claim-job`, 'POST', input); }
-  appendEvent(jobId: string, event: Partial<JobEvent>) { return this.request<JobEvent>(`/jobs/${encodeURIComponent(jobId)}/events`, 'POST', event); }
-  completeJob(jobId: string, result: Record<string, unknown>) { return this.request(`/jobs/${encodeURIComponent(jobId)}/complete`, 'POST', result); }
-  failJob(jobId: string, result: Record<string, unknown>) { return this.request(`/jobs/${encodeURIComponent(jobId)}/fail`, 'POST', result); }
+  register(agent: AgentRegistrationRequest) {
+    return this.request<BuildAgent>('/build-agents/register', 'POST', AgentRegistrationRequestSchema.parse(agent));
+  }
+
+  heartbeat(agent: AgentHeartbeatRequest) {
+    return this.request<BuildAgent>(`/build-agents/${encodeURIComponent(this.credentials.agentId)}/heartbeat`, 'POST', AgentHeartbeatRequestSchema.parse(agent));
+  }
+
+  claimJob(input: AgentClaimRequest) {
+    return this.request<ClaimedJob | { claimed: false }>(`/build-agents/${encodeURIComponent(this.credentials.agentId)}/claim-job`, 'POST', AgentClaimRequestSchema.parse(input));
+  }
+
+  appendEvent(jobId: string, event: JobEventRequest) {
+    return this.request<JobEvent>(`/jobs/${encodeURIComponent(jobId)}/events`, 'POST', JobEventRequestSchema.parse(event));
+  }
+
+  completeJob(jobId: string, result: JobCompleteRequest) {
+    return this.request(`/jobs/${encodeURIComponent(jobId)}/complete`, 'POST', JobCompleteRequestSchema.parse(result));
+  }
+
+  failJob(jobId: string, result: JobFailRequest) {
+    return this.request(`/jobs/${encodeURIComponent(jobId)}/fail`, 'POST', JobFailRequestSchema.parse(result));
+  }
 
   async request<T = Record<string, unknown>>(path: string, method: string, body: unknown): Promise<T> {
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {

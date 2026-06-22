@@ -27,6 +27,9 @@
     "start": "node dist/cli.js",
     "build": "node ../../scripts/build-agent-package.mjs"
   },
+  "dependencies": {
+    "uuid": "^14.0.0"
+  },
   "devDependencies": {
     "@autodevops/codex-prompts": "0.1.0",
     "@autodevops/integrations": "0.1.0",

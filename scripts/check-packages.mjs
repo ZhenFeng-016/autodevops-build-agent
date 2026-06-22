@@ -15,6 +15,15 @@ const destination = mkdtempSync(join(tmpdir(), 'autodevops-pack-audit-'));
 const npmCli = process.env.npm_execpath;
 if (!npmCli) throw new Error('npm_execpath is required; run this audit through npm run check:packages');
 
+const contractSource = [
+  readFileSync('packages/domain/src/index.ts', 'utf8'),
+  readFileSync('packages/domain/src/protocol.ts', 'utf8'),
+].join('\n');
+const forbiddenContractLogic = /(?:node:fs|node:path|Prisma|inspectRepository|createRuntimeContract|applyJenkinsWebhook|summarizeProjectActionJobs)/;
+if (forbiddenContractLogic.test(contractSource)) {
+  throw new Error('@zhenfengxx/contracts contains control-plane or repository implementation logic');
+}
+
 try {
   for (const [name, directory] of packages) {
     const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'));

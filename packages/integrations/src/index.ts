@@ -1,4 +1,7 @@
-import { newEntityId, type Incident, type JenkinsBuildWebhook } from '@zhenfengxx/contracts';
+import { v7 as uuidv7 } from 'uuid';
+import type { Incident, JenkinsBuildWebhook } from '@zhenfengxx/contracts';
+
+const newEntityId = () => uuidv7();
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';

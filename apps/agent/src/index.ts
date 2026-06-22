@@ -6,18 +6,23 @@ import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { buildCommandInferencePrompt, buildFixApplyPrompt, buildIncidentAnalysisPrompt, codexExecutionFailureResult, parseCodexJsonResult } from '@autodevops/codex-prompts';
-import { generateCodexFixBranchName, newEntityId, type BuildAgent, type ClaimedJob, type Job, type Project, type RuntimeContract } from '@zhenfengxx/contracts';
+import { JobParamsEnvelopeSchema, PROTOCOL_VERSION, type BuildAgent, type ClaimedJob, type Job, type Project, type RuntimeContract } from '@zhenfengxx/contracts';
 import { createRuntimeContract, inspectRepository } from '@zhenfengxx/repo-inspector';
 import { agentAuthHeaders } from '@zhenfengxx/agent-sdk';
 import { JenkinsClient, runCodexExec } from '@autodevops/integrations';
+import { generateCodexFixBranchName, newEntityId } from './runtime-utils.js';
 
 declare const __AUTODEVOPS_AGENT_VERSION__: string;
 declare const __AUTODEVOPS_AGENT_REVISION__: string;
 
-const BUNDLED_AGENT_VERSION =
+const BUNDLED_AGENT_PACKAGE_VERSION =
   typeof __AUTODEVOPS_AGENT_VERSION__ !== 'undefined'
-    ? `${__AUTODEVOPS_AGENT_VERSION__}+${typeof __AUTODEVOPS_AGENT_REVISION__ !== 'undefined' ? __AUTODEVOPS_AGENT_REVISION__ : 'unknown'}`
+    ? __AUTODEVOPS_AGENT_VERSION__
     : undefined;
+const BUNDLED_AGENT_REVISION = typeof __AUTODEVOPS_AGENT_REVISION__ !== 'undefined' ? __AUTODEVOPS_AGENT_REVISION__ : undefined;
+const BUNDLED_AGENT_VERSION = BUNDLED_AGENT_PACKAGE_VERSION
+  ? `${BUNDLED_AGENT_PACKAGE_VERSION}+${BUNDLED_AGENT_REVISION ?? 'unknown'}`
+  : undefined;
 
 if (process.argv.includes('--version') || process.argv.includes('-v')) {
   console.log(`autodevops-agent ${BUNDLED_AGENT_VERSION ?? 'development'}`);
@@ -74,6 +79,7 @@ async function main() {
 
 async function register() {
   const readiness = await buildReadiness();
+  const identity = await protocolIdentity();
   await apiFetch('/build-agents/register', 'POST', {
     id: AGENT_ID,
     name: AGENT_NAME,
@@ -89,13 +95,15 @@ async function register() {
       codexHome: process.env.CODEX_HOME,
       serviceManager: process.env.AUTODEVOPS_AGENT_SERVICE_MANAGER ?? 'pm2',
     },
-    version: await agentVersion(),
+    ...identity,
+    version: `${identity.agentVersion}+${identity.buildRevision}`,
   });
   log(`registered ${AGENT_ID}`);
 }
 
 async function heartbeat() {
   const readiness = await buildReadiness();
+  const identity = await protocolIdentity();
   await apiFetch(`/build-agents/${encodeURIComponent(AGENT_ID)}/heartbeat`, 'POST', {
     status: readiness.ready ? 'online' : 'degraded',
     serverId: process.env.AUTODEVOPS_AGENT_SERVER_ID,
@@ -107,7 +115,8 @@ async function heartbeat() {
       hostname: hostname(),
       codexSkills: await codexSkills(),
     },
-    version: await agentVersion(),
+    ...identity,
+    version: `${identity.agentVersion}+${identity.buildRevision}`,
   });
 }
 
@@ -115,6 +124,7 @@ async function claimJob(): Promise<ClaimedJob | { claimed: false }> {
   return apiFetch<ClaimedJob | { claimed: false }>(`/build-agents/${encodeURIComponent(AGENT_ID)}/claim-job`, 'POST', {
     capabilities: BASE_CAPABILITIES,
     leaseSeconds: 900,
+    protocolVersion: PROTOCOL_VERSION,
   });
 }
 
@@ -122,6 +132,7 @@ async function executeClaim(claim: ClaimedJob) {
   const { job, attempt } = claim;
   log(`claimed ${job.id} ${job.type}`);
   try {
+    JobParamsEnvelopeSchema.parse({ type: job.type, params: job.params });
     await jobEvent(job.id, attempt.id, 'agent.started', 'running', `Agent ${AGENT_ID} started ${job.type}`);
     const resultSummary = await executeJob(job);
     await apiFetch(`/jobs/${encodeURIComponent(job.id)}/complete`, 'POST', {
@@ -919,6 +930,17 @@ async function agentVersion() {
   const packagedVersionFile = join(process.cwd(), '.autodevops-version');
   if (existsSync(packagedVersionFile)) return readFileSync(packagedVersionFile, 'utf8').trim() || undefined;
   return gitHead(process.cwd()).catch(() => undefined);
+}
+
+async function protocolIdentity() {
+  const legacyVersion = (await agentVersion()) ?? 'development';
+  const [legacyPackageVersion, legacyRevision] = legacyVersion.split('+', 2);
+  return {
+    agentVersion: stringValue(process.env.AUTODEVOPS_AGENT_PACKAGE_VERSION) || BUNDLED_AGENT_PACKAGE_VERSION || legacyPackageVersion,
+    buildRevision: stringValue(process.env.AUTODEVOPS_BUILD_REVISION) || BUNDLED_AGENT_REVISION || legacyRevision || await gitHead(process.cwd()).catch(() => 'development'),
+    protocolVersion: PROTOCOL_VERSION,
+    supportedProtocolVersions: [PROTOCOL_VERSION],
+  };
 }
 
 async function git(cwd: string, args: string[], timeout = 120_000) {

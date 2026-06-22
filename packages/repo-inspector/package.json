@@ -14,5 +14,8 @@
   "types": "./dist/index.d.ts",
   "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org" },
   "scripts": { "build": "tsc -p tsconfig.json" },
-  "dependencies": { "@zhenfengxx/contracts": "1.0.1" }
+  "dependencies": {
+    "@zhenfengxx/contracts": "1.0.1",
+    "uuid": "^14.0.0"
+  }
 }
