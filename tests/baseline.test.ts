@@ -22,7 +22,11 @@ test('Agent SDK HMAC signatures remain deterministic and timestamp guarded', () 
 test('packaged BuildAgent reports a versioned executable', () => {
   const output = execFileSync(process.execPath, ['apps/agent/dist/cli.js', '--version'], { encoding: 'utf8' }).trim();
   const manifest = JSON.parse(readFileSync('apps/agent/package.json', 'utf8')) as { version: string };
-  assert.match(output, new RegExp(`^autodevops-agent ${manifest.version.replace(/\./g, '\\.')}\\+[a-f0-9]{12}$`));
+  assert.match(output, new RegExp(`^autodevops-agent ${manifest.version.replace(/\./g, '\\.')}\\+[a-f0-9]{12} protocol=1$`));
+  const json = JSON.parse(execFileSync(process.execPath, ['apps/agent/dist/cli.js', 'version', '--json'], { encoding: 'utf8' })) as Record<string, unknown>;
+  assert.equal(json.agentVersion, manifest.version);
+  assert.match(String(json.buildRevision), /^[a-f0-9]{12}$/);
+  assert.equal(json.protocolVersion, 1);
 });
 
 test('protocol v1 validates registration and negotiates capabilities', () => {
