@@ -20,17 +20,21 @@ function npm(args) {
 }
 
 if (!checkOnly) {
-  if (process.env.GITHUB_ACTIONS && !process.env.NODE_AUTH_TOKEN) {
-    throw new Error(
-      'NPM_PROMOTE_TOKEN GitHub environment secret is required because npm trusted publishing does not support npm dist-tag add',
-    );
-  }
-  try {
-    const identity = npm(['whoami']);
-    if (!identity) throw new Error('npm whoami returned an empty identity');
-    console.log(`Authenticated as ${identity}`);
-  } catch (error) {
-    throw new Error('npm authentication is required before promoting packages. Run npm login locally, or configure NPM_PROMOTE_TOKEN in GitHub Actions.');
+  if (process.env.GITHUB_ACTIONS) {
+    if (!process.env.NODE_AUTH_TOKEN) {
+      throw new Error(
+        'NPM_PROMOTE_TOKEN GitHub environment secret is required because npm trusted publishing does not support npm dist-tag add',
+      );
+    }
+    console.log('Using NODE_AUTH_TOKEN from the npm GitHub environment for latest promotion.');
+  } else {
+    try {
+      const identity = npm(['whoami']);
+      if (!identity) throw new Error('npm whoami returned an empty identity');
+      console.log(`Authenticated as ${identity}`);
+    } catch (error) {
+      throw new Error('npm authentication is required before promoting packages. Run npm login locally, or configure NPM_PROMOTE_TOKEN in GitHub Actions.');
+    }
   }
 }
 
