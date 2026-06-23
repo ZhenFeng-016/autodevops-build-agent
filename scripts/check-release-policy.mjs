@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 const publishWorkflow = readFileSync('.github/workflows/publish-npm-packages.yml', 'utf8');
+const promoteWorkflow = readFileSync('.github/workflows/promote-npm-latest.yml', 'utf8');
 const versionWorkflow = readFileSync('.github/workflows/version-packages.yml', 'utf8');
 const changesetConfig = JSON.parse(readFileSync('.changeset/config.json', 'utf8'));
 
@@ -26,6 +27,29 @@ for (const fragment of requiredPublishFragments) {
 for (const forbidden of ['NODE_AUTH_TOKEN', 'NPM_TOKEN', '_authToken', 'npm_token', 'cache: npm']) {
   if (publishWorkflow.includes(forbidden)) {
     throw new Error(`publish workflow must not use a long-lived npm credential: ${forbidden}`);
+  }
+  if (promoteWorkflow.includes(forbidden)) {
+    throw new Error(`promote workflow must not use a long-lived npm credential: ${forbidden}`);
+  }
+}
+
+const requiredPromoteFragments = [
+  'workflow_dispatch:',
+  'id-token: write',
+  'environment: npm',
+  'actions/checkout@v7',
+  'actions/setup-node@v6',
+  'node-version: 24',
+  'registry-url: https://registry.npmjs.org',
+  'package-manager-cache: false',
+  'npm run release:promote -- ${{ inputs.version }} --check',
+  'npm run release:promote -- ${{ inputs.version }}',
+  'npm run release:verify -- ${{ inputs.version }}',
+];
+
+for (const fragment of requiredPromoteFragments) {
+  if (!promoteWorkflow.includes(fragment)) {
+    throw new Error(`promote workflow is missing required policy: ${fragment}`);
   }
 }
 
