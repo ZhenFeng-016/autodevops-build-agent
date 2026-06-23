@@ -43,7 +43,7 @@ try {
 
   const cli = resolve(directory, 'node_modules/@zhenfengxx/build-agent/dist/cli.js');
   const versionOutput = execFileSync(process.execPath, [cli, '--version'], { encoding: 'utf8' }).trim();
-  assert.match(versionOutput, new RegExp(`^autodevops-agent ${version.replace(/\./g, '\\.')}\\+[a-f0-9]{12}$`));
+  assert.match(versionOutput, new RegExp(`^autodevops-agent ${version.replace(/\./g, '\\.')}\\+[a-f0-9]{12} protocol=1$`));
   console.log(`Published release ${version} verified from npmjs in ${names.length} clean-installed packages`);
 } finally {
   rmSync(directory, { recursive: true, force: true });
