@@ -1,6 +1,6 @@
 {
   "name": "@zhenfengxx/agent-sdk",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Authenticated API client and signing helpers for AutoDevOps BuildAgents.",
   "license": "MIT",
   "repository": {
@@ -28,6 +28,6 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@zhenfengxx/contracts": "1.1.1"
+    "@zhenfengxx/contracts": "1.2.0"
   }
 }

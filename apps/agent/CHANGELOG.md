@@ -1,5 +1,13 @@
 # @zhenfengxx/build-agent
 
+## 1.2.0
+
+### Minor Changes
+
+- 89a0321: Split the BuildAgent into CLI, runtime, API client, readiness, injected system
+  adapters and per-domain job executors. Add protocol identity output, safe PM2
+  configuration, diagnostics and a clean-Linux npm installation smoke test.
+
 ## 1.1.1
 
 ### Patch Changes

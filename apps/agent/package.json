@@ -1,6 +1,6 @@
 {
   "name": "@zhenfengxx/build-agent",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "AutoDevOps build-plane worker for repository, Jenkins, and Codex jobs.",
   "license": "MIT",
   "repository": {
@@ -36,8 +36,8 @@
   "devDependencies": {
     "@autodevops/codex-prompts": "0.1.0",
     "@autodevops/integrations": "0.1.0",
-    "@zhenfengxx/agent-sdk": "1.1.1",
-    "@zhenfengxx/contracts": "1.1.1",
-    "@zhenfengxx/repo-inspector": "1.1.1"
+    "@zhenfengxx/agent-sdk": "1.2.0",
+    "@zhenfengxx/contracts": "1.2.0",
+    "@zhenfengxx/repo-inspector": "1.2.0"
   }
 }
