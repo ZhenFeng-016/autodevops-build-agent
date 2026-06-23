@@ -28,14 +28,16 @@ for (const forbidden of ['NODE_AUTH_TOKEN', 'NPM_TOKEN', '_authToken', 'npm_toke
   if (publishWorkflow.includes(forbidden)) {
     throw new Error(`publish workflow must not use a long-lived npm credential: ${forbidden}`);
   }
+}
+
+for (const forbidden of ['NPM_TOKEN', '_authToken', 'npm_token', 'cache: npm', 'id-token: write']) {
   if (promoteWorkflow.includes(forbidden)) {
-    throw new Error(`promote workflow must not use a long-lived npm credential: ${forbidden}`);
+    throw new Error(`promote workflow has an unsafe or invalid latest-promotion policy: ${forbidden}`);
   }
 }
 
 const requiredPromoteFragments = [
   'workflow_dispatch:',
-  'id-token: write',
   'environment: npm',
   'actions/checkout@v7',
   'actions/setup-node@v6',
@@ -43,6 +45,8 @@ const requiredPromoteFragments = [
   'registry-url: https://registry.npmjs.org',
   'package-manager-cache: false',
   'npm run release:promote -- ${{ inputs.version }} --check',
+  'NPM_PROMOTE_TOKEN: ${{ secrets.NPM_PROMOTE_TOKEN }}',
+  'NODE_AUTH_TOKEN: ${{ secrets.NPM_PROMOTE_TOKEN }}',
   'npm run release:promote -- ${{ inputs.version }}',
   'npm run release:verify -- ${{ inputs.version }}',
 ];
@@ -75,4 +79,4 @@ if (!fixed || fixed.length !== publicPackages.length) {
   throw new Error('all four public packages must remain in one fixed release group');
 }
 
-console.log('Release policy check passed: OIDC-only publish, guarded version PR, fixed public package group');
+console.log('Release policy check passed: OIDC publish, token-scoped latest promotion, guarded version PR, fixed public package group');
