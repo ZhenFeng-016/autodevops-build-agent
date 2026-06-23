@@ -1,0 +1,37 @@
+name: Promote npm packages to latest
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Already published version to promote from next to latest"
+        required: true
+        type: string
+        default: "1.2.0"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Install OIDC-capable npm
+        run: npm install --global npm@11.5.1
+      - run: npm ci
+      - name: Verify promotion eligibility
+        run: npm run release:promote -- ${{ inputs.version }} --check
+      - name: Promote version to latest
+        run: npm run release:promote -- ${{ inputs.version }}
+      - name: Verify published latest install
+        run: npm run release:verify -- ${{ inputs.version }}

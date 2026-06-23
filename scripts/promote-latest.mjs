@@ -20,9 +20,16 @@ function npm(args) {
 }
 
 if (!checkOnly) {
-  const identity = npm(['whoami']);
-  if (!identity) throw new Error('npm authentication is required before promoting packages');
-  console.log(`Authenticated as ${identity}`);
+  try {
+    const identity = npm(['whoami']);
+    if (!identity) throw new Error('npm whoami returned an empty identity');
+    console.log(`Authenticated as ${identity}`);
+  } catch (error) {
+    if (!process.env.GITHUB_ACTIONS) {
+      throw new Error('npm authentication is required before promoting packages. Run npm login, then retry.');
+    }
+    console.log('npm whoami did not return an identity; continuing under GitHub Actions OIDC trusted publishing.');
+  }
 }
 
 for (const packageName of packages) {

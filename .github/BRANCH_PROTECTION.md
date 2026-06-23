@@ -9,4 +9,9 @@ Configure a GitHub ruleset for `main` after the repository is created:
 - Block force pushes and branch deletion.
 - Allow the Changesets version workflow to create pull requests; it must not bypass required CI.
 
-The `npm` environment must restrict deployment to `main`. Each public npm package must trust `ZhenFeng-016/autodevops-build-agent`, workflow `publish-npm-packages.yml`, environment `npm`, and only the `npm publish` action.
+The `npm` environment must restrict deployment to `main`.
+
+Each public npm package must configure trusted publishers for:
+
+- `ZhenFeng-016/autodevops-build-agent`, workflow `publish-npm-packages.yml`, environment `npm`, allowed action `npm publish`.
+- `ZhenFeng-016/autodevops-build-agent`, workflow `promote-npm-latest.yml`, environment `npm`, allowed action `npm dist-tag add`.
