@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { Project } from '@zhenfengxx/contracts';
@@ -32,6 +32,9 @@ export class SystemGitAdapter implements GitAdapter {
     await this.run(targetPath, ['checkout', gitRef], 60_000);
     await this.run(targetPath, ['reset', '--hard', 'HEAD'], 60_000);
     await this.run(targetPath, ['clean', '-fd'], 60_000);
+    if (resolve(targetPath) === resolve(this.config.workspaceRoot, project.id)) {
+      materializeWorkspaceAlias(this.config.workspaceRoot, project.name, targetPath);
+    }
     return targetPath;
   }
 
@@ -125,6 +128,25 @@ export class SystemGitAdapter implements GitAdapter {
     if (!currentEmail) await this.run(cwd, ['config', 'user.email', process.env.AUTODEVOPS_GIT_EMAIL || 'autodevops-agent@example.local']);
     if (!currentName) await this.run(cwd, ['config', 'user.name', process.env.AUTODEVOPS_GIT_NAME || 'AutoDevOps Agent']);
   }
+}
+
+export function materializeWorkspaceAlias(workspaceRoot: string, projectName: string, targetPath: string) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(projectName) || projectName === '.' || projectName === '..') {
+    throw new Error(`Project name cannot be used as a workspace alias: ${projectName}`);
+  }
+  assertInsideWorkspace(workspaceRoot, targetPath);
+  const aliasPath = resolve(workspaceRoot, projectName);
+  assertInsideWorkspace(workspaceRoot, aliasPath);
+  if (aliasPath === resolve(targetPath)) return aliasPath;
+
+  if (existsSync(aliasPath)) {
+    const entry = lstatSync(aliasPath);
+    if (entry.isSymbolicLink() && realpathSync(aliasPath) === realpathSync(targetPath)) return aliasPath;
+    throw new Error(`Workspace alias already exists and does not point to this project: ${projectName}`);
+  }
+
+  symlinkSync(resolve(targetPath), aliasPath, process.platform === 'win32' ? 'junction' : 'dir');
+  return aliasPath;
 }
 
 function assertInsideWorkspace(workspaceRoot: string, targetPath: string) {
