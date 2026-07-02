@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { Project } from '@zhenfengxx/contracts';
@@ -39,6 +39,29 @@ export class SystemGitAdapter implements GitAdapter {
   }
 
   async installDependencies(cwd: string, timeoutMs: number) {
+    return this.installDependenciesRecursive(cwd, timeoutMs, new Set<string>());
+  }
+
+  private async installDependenciesRecursive(cwd: string, timeoutMs: number, visited: Set<string>): Promise<Record<string, unknown>> {
+    const canonicalPath = realpathSync(cwd);
+    assertInsideWorkspace(this.config.workspaceRoot, canonicalPath);
+    if (visited.has(canonicalPath)) return { skipped: true, reason: 'Local file dependency already prepared' };
+    visited.add(canonicalPath);
+
+    const localDependencies = localFileDependencyPaths(canonicalPath, this.config.workspaceRoot);
+    const preparedLocalDependencies: Array<{ path: string; install: Record<string, unknown> }> = [];
+    for (const dependencyPath of localDependencies) {
+      preparedLocalDependencies.push({
+        path: dependencyPath,
+        install: await this.installDependenciesRecursive(dependencyPath, timeoutMs, visited),
+      });
+    }
+
+    const install = await this.installCurrentDirectory(canonicalPath, timeoutMs);
+    return localDependencies.length ? { ...install, preparedLocalDependencies } : install;
+  }
+
+  private async installCurrentDirectory(cwd: string, timeoutMs: number) {
     const npmLockTracked = existsSync(join(cwd, 'package-lock.json')) && (await this.fileIsTracked(cwd, 'package-lock.json'));
     const command = existsSync(join(cwd, 'pnpm-lock.yaml')) ? 'pnpm' : npmLockTracked ? 'npm' : existsSync(join(cwd, 'yarn.lock')) ? 'yarn' : existsSync(join(cwd, 'package.json')) ? 'npm' : '';
     if (!command) return { skipped: true, reason: 'No package.json found' };
@@ -147,6 +170,27 @@ export function materializeWorkspaceAlias(workspaceRoot: string, projectName: st
 
   symlinkSync(resolve(targetPath), aliasPath, process.platform === 'win32' ? 'junction' : 'dir');
   return aliasPath;
+}
+
+export function localFileDependencyPaths(cwd: string, workspaceRoot: string) {
+  const manifestPath = join(cwd, 'package.json');
+  if (!existsSync(manifestPath)) return [];
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+  const dependencyGroups = ['dependencies', 'devDependencies', 'optionalDependencies']
+    .map((key) => manifest[key])
+    .filter((group): group is Record<string, unknown> => Boolean(group && typeof group === 'object' && !Array.isArray(group)));
+  const paths = new Set<string>();
+  for (const group of dependencyGroups) {
+    for (const specifier of Object.values(group)) {
+      if (typeof specifier !== 'string' || !specifier.startsWith('file:')) continue;
+      const candidate = resolve(cwd, specifier.slice('file:'.length));
+      if (!existsSync(join(candidate, 'package.json'))) continue;
+      const canonicalPath = realpathSync(candidate);
+      assertInsideWorkspace(workspaceRoot, canonicalPath);
+      paths.add(canonicalPath);
+    }
+  }
+  return [...paths].sort();
 }
 
 function assertInsideWorkspace(workspaceRoot: string, targetPath: string) {
