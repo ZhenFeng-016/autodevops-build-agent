@@ -6,6 +6,7 @@ import type { Project } from '@zhenfengxx/contracts';
 import { commandErrorOutput, stringValue } from '../common.js';
 import type { AgentConfig } from '../config.js';
 import { gitHead } from '../identity.js';
+import { withTransientGitRetry } from '../transient-git-retry.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -25,9 +26,9 @@ export class SystemGitAdapter implements GitAdapter {
     assertInsideWorkspace(this.config.workspaceRoot, targetPath);
     mkdirSync(this.config.workspaceRoot, { recursive: true });
     if (!existsSync(join(targetPath, '.git'))) {
-      await execFileAsync('git', ['clone', '--branch', gitRef, project.repositoryUrl, targetPath], { timeout: 180_000 });
+      await this.runWithTransientGitRetry('git', ['clone', '--branch', gitRef, project.repositoryUrl, targetPath], { timeout: 180_000 });
     } else {
-      await this.run(targetPath, ['fetch', '--all', '--tags', '--prune'], 180_000);
+      await this.runWithTransientGitRetry('git', ['fetch', '--all', '--tags', '--prune'], { cwd: targetPath, timeout: 180_000 });
     }
     await this.run(targetPath, ['checkout', gitRef], 60_000);
     await this.run(targetPath, ['reset', '--hard', 'HEAD'], 60_000);
@@ -75,7 +76,7 @@ export class SystemGitAdapter implements GitAdapter {
           : ['install', '--include=dev', '--package-lock=false'];
     const env = { ...process.env, NODE_ENV: 'development', npm_config_omit: '' };
     try {
-      const { stdout, stderr } = await execFileAsync(command, args, { cwd, timeout: timeoutMs, env });
+      const { stdout, stderr } = await this.runWithTransientGitRetry(command, args, { cwd, timeout: timeoutMs, env });
       return installResult(command, args, stdout, stderr, false, false);
     } catch (error) {
       const output = commandErrorOutput(error);
@@ -83,20 +84,35 @@ export class SystemGitAdapter implements GitAdapter {
       if (args[0] === 'ci' && /can only install packages when[\s\S]*in sync/i.test(output)) {
         const installArgs = ['install', '--include=dev', '--package-lock=false'];
         try {
-          const { stdout, stderr } = await execFileAsync(command, installArgs, { cwd, timeout: timeoutMs, env });
+          const { stdout, stderr } = await this.runWithTransientGitRetry(command, installArgs, { cwd, timeout: timeoutMs, env });
           return { ...installResult(command, installArgs, stdout, stderr, false, true), fallbackReason: 'Committed npm lockfile is out of sync with package.json.' };
         } catch (installError) {
           if (!/\bERESOLVE\b/.test(commandErrorOutput(installError))) throw installError;
           const fallbackArgs = [...installArgs, '--legacy-peer-deps'];
-          const { stdout, stderr } = await execFileAsync(command, fallbackArgs, { cwd, timeout: timeoutMs, env });
+          const { stdout, stderr } = await this.runWithTransientGitRetry(command, fallbackArgs, { cwd, timeout: timeoutMs, env });
           return { ...installResult(command, fallbackArgs, stdout, stderr, true, true), fallbackReason: 'Committed npm lockfile is out of sync and strict peer dependency resolution failed.' };
         }
       }
       if (!/\bERESOLVE\b/.test(output)) throw error;
       const fallbackArgs = [...args, '--legacy-peer-deps'];
-      const { stdout, stderr } = await execFileAsync(command, fallbackArgs, { cwd, timeout: timeoutMs, env });
+      const { stdout, stderr } = await this.runWithTransientGitRetry(command, fallbackArgs, { cwd, timeout: timeoutMs, env });
       return { ...installResult(command, fallbackArgs, stdout, stderr, true, false), fallbackReason: 'Strict npm dependency resolution failed with ERESOLVE.' };
     }
+  }
+
+  private async runWithTransientGitRetry(
+    command: string,
+    args: string[],
+    options: { cwd?: string; timeout?: number; env?: NodeJS.ProcessEnv },
+  ) {
+    return withTransientGitRetry(
+      () => execFileAsync(command, args, { ...options, encoding: 'utf8' as const }),
+      {
+        onRetry: ({ attempt, nextAttempt, delayMs }) => {
+          console.warn(`Transient Git/SSH failure while running ${command}; retrying attempt ${nextAttempt}/3 after ${delayMs}ms (attempt ${attempt} failed).`);
+        },
+      },
+    );
   }
 
   async checkoutBranch(cwd: string, branchName: string, baseBranch: string) {
