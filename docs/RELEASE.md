@@ -1,5 +1,8 @@
 # Release runbook
 
+For a detailed Chinese operator walkthrough, see
+[`RELEASE.zh-CN.md`](RELEASE.zh-CN.md).
+
 This runbook is the release authority for the four public `@zhenfengxx`
 packages in this repository. A release is incomplete until every required
 check and external setting below has been verified against current state.
@@ -13,8 +16,9 @@ check and external setting below has been verified against current state.
   disabled.
 - The GitHub environment is named `npm`, does not permit administrator bypass,
   and accepts deployments from protected branches only.
-- GitHub Actions is permitted to create version pull requests. No npm token is
-  stored as an Actions or environment secret.
+- GitHub Actions is permitted to create version pull requests. Publishing uses
+  OIDC; the protected `npm` environment stores only the granular
+  `NPM_PROMOTE_TOKEN` required for `npm dist-tag add`.
 - The publish workflow disables the package-manager cache so release builds do
   not reuse dependency state from an earlier job.
 
@@ -38,8 +42,8 @@ The packages are:
 - `@zhenfengxx/repo-inspector`
 - `@zhenfengxx/build-agent`
 
-Password, 2FA, recovery codes, and npm tokens must never be copied into source,
-command arguments, workflow files, repository secrets, or logs.
+Password, 2FA, recovery codes, and token values must never be copied into
+source, command arguments, workflow files, pull requests, or logs.
 
 ## Release sequence
 
@@ -54,17 +58,18 @@ command arguments, workflow files, repository secrets, or logs.
    npm run release:verify -- <version>
    ```
 
-6. Complete compatibility and real-host deployment gates through M7 before
-   promoting the same version:
+6. Complete compatibility and real-host deployment gates through M7, then
+   dispatch `Promote npm packages to latest` from `main` with the verified
+   version. A local eligibility check remains available:
 
    ```bash
    npm run release:promote -- <version> --check
-   npm run release:promote -- <version>
    ```
 
-The promotion step is intentionally interactive and local because npm dist-tag
-mutation is not covered by Trusted Publishing. It checks that all four `next`
-tags point to the requested version before changing any `latest` tag.
+The protected promotion workflow checks that all four `next` tags point to the
+requested version before changing any `latest` tag. npm dist-tag mutation is
+not covered by Trusted Publishing, so the workflow uses the granular
+`NPM_PROMOTE_TOKEN` from the `npm` GitHub environment.
 
 ## Failure handling
 

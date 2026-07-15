@@ -22,22 +22,22 @@ Every user-visible package change requires a Changeset. Merging the generated ve
 
 Repository protection, npm Trusted Publisher fields, version PR handling, OIDC
 proof, clean-install verification, and recovery procedures are defined in
-[`docs/RELEASE.md`](docs/RELEASE.md).
+[`docs/RELEASE.md`](docs/RELEASE.md). The detailed Chinese operator guide is
+[`docs/RELEASE.zh-CN.md`](docs/RELEASE.zh-CN.md).
 
-After clean-install and compatibility verification, check and promote the exact
-same version from a locally authenticated terminal. Authentication remains
-interactive and is never passed as a command argument:
+After clean-install and compatibility verification, verify the exact candidate
+version before dispatching the protected `Promote npm packages to latest`
+workflow:
 
 ```bash
 npm run release:verify -- <version>
 npm run release:promote -- <version> --check
-npm run release:promote -- <version>
 ```
 
-The promotion command refuses to proceed unless all four `next` tags already
-point to the requested, published version. It then verifies every resulting
-`latest` tag. This local step is intentional: Trusted Publishing covers package
-publication, while tag mutation must not introduce a long-lived npm token into
-GitHub Actions.
+The promotion workflow refuses to proceed unless all four `next` tags already
+point to the requested, published version. Trusted Publishing covers package
+publication; a granular `NPM_PROMOTE_TOKEN`, stored only in the protected `npm`
+GitHub environment, is used for `npm dist-tag add`.
 
-No npm password, recovery code, automation token, or `.npmrc` credential belongs in this repository or its GitHub settings. A granular automation token is permitted only as an explicitly approved fallback when OIDC is unavailable.
+No npm password, recovery code, token value, or `.npmrc` credential belongs in
+source, command arguments, pull requests, or logs.

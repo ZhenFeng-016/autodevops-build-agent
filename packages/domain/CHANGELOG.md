@@ -1,5 +1,11 @@
 # @zhenfengxx/contracts
 
+## 1.2.1
+
+### Patch Changes
+
+- 35fe727: Add the `runtime.cleanup` job type and BuildAgent executor for safe remote project cleanup.
+
 ## 1.2.0
 
 ## 1.1.1
