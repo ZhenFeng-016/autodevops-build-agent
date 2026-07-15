@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { Project } from '@zhenfengxx/contracts';
 import { commandErrorOutput, stringValue } from '../common.js';
 import type { AgentConfig } from '../config.js';
 import { gitHead } from '../identity.js';
+import { withTransientGitRetry } from '../transient-git-retry.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -25,17 +26,43 @@ export class SystemGitAdapter implements GitAdapter {
     assertInsideWorkspace(this.config.workspaceRoot, targetPath);
     mkdirSync(this.config.workspaceRoot, { recursive: true });
     if (!existsSync(join(targetPath, '.git'))) {
-      await execFileAsync('git', ['clone', '--branch', gitRef, project.repositoryUrl, targetPath], { timeout: 180_000 });
+      await this.runWithTransientGitRetry('git', ['clone', '--branch', gitRef, project.repositoryUrl, targetPath], { timeout: 180_000 });
     } else {
-      await this.run(targetPath, ['fetch', '--all', '--tags', '--prune'], 180_000);
+      await this.runWithTransientGitRetry('git', ['fetch', '--all', '--tags', '--prune'], { cwd: targetPath, timeout: 180_000 });
     }
     await this.run(targetPath, ['checkout', gitRef], 60_000);
     await this.run(targetPath, ['reset', '--hard', 'HEAD'], 60_000);
     await this.run(targetPath, ['clean', '-fd'], 60_000);
+    if (resolve(targetPath) === resolve(this.config.workspaceRoot, project.id)) {
+      materializeWorkspaceAlias(this.config.workspaceRoot, project.name, targetPath);
+    }
     return targetPath;
   }
 
   async installDependencies(cwd: string, timeoutMs: number) {
+    return this.installDependenciesRecursive(cwd, timeoutMs, new Set<string>());
+  }
+
+  private async installDependenciesRecursive(cwd: string, timeoutMs: number, visited: Set<string>): Promise<Record<string, unknown>> {
+    const canonicalPath = realpathSync(cwd);
+    assertInsideWorkspace(this.config.workspaceRoot, canonicalPath);
+    if (visited.has(canonicalPath)) return { skipped: true, reason: 'Local file dependency already prepared' };
+    visited.add(canonicalPath);
+
+    const localDependencies = localFileDependencyPaths(canonicalPath, this.config.workspaceRoot);
+    const preparedLocalDependencies: Array<{ path: string; install: Record<string, unknown> }> = [];
+    for (const dependencyPath of localDependencies) {
+      preparedLocalDependencies.push({
+        path: dependencyPath,
+        install: await this.installDependenciesRecursive(dependencyPath, timeoutMs, visited),
+      });
+    }
+
+    const install = await this.installCurrentDirectory(canonicalPath, timeoutMs);
+    return localDependencies.length ? { ...install, preparedLocalDependencies } : install;
+  }
+
+  private async installCurrentDirectory(cwd: string, timeoutMs: number) {
     const npmLockTracked = existsSync(join(cwd, 'package-lock.json')) && (await this.fileIsTracked(cwd, 'package-lock.json'));
     const command = existsSync(join(cwd, 'pnpm-lock.yaml')) ? 'pnpm' : npmLockTracked ? 'npm' : existsSync(join(cwd, 'yarn.lock')) ? 'yarn' : existsSync(join(cwd, 'package.json')) ? 'npm' : '';
     if (!command) return { skipped: true, reason: 'No package.json found' };
@@ -49,7 +76,7 @@ export class SystemGitAdapter implements GitAdapter {
           : ['install', '--include=dev', '--package-lock=false'];
     const env = { ...process.env, NODE_ENV: 'development', npm_config_omit: '' };
     try {
-      const { stdout, stderr } = await execFileAsync(command, args, { cwd, timeout: timeoutMs, env });
+      const { stdout, stderr } = await this.runWithTransientGitRetry(command, args, { cwd, timeout: timeoutMs, env });
       return installResult(command, args, stdout, stderr, false, false);
     } catch (error) {
       const output = commandErrorOutput(error);
@@ -57,20 +84,35 @@ export class SystemGitAdapter implements GitAdapter {
       if (args[0] === 'ci' && /can only install packages when[\s\S]*in sync/i.test(output)) {
         const installArgs = ['install', '--include=dev', '--package-lock=false'];
         try {
-          const { stdout, stderr } = await execFileAsync(command, installArgs, { cwd, timeout: timeoutMs, env });
+          const { stdout, stderr } = await this.runWithTransientGitRetry(command, installArgs, { cwd, timeout: timeoutMs, env });
           return { ...installResult(command, installArgs, stdout, stderr, false, true), fallbackReason: 'Committed npm lockfile is out of sync with package.json.' };
         } catch (installError) {
           if (!/\bERESOLVE\b/.test(commandErrorOutput(installError))) throw installError;
           const fallbackArgs = [...installArgs, '--legacy-peer-deps'];
-          const { stdout, stderr } = await execFileAsync(command, fallbackArgs, { cwd, timeout: timeoutMs, env });
+          const { stdout, stderr } = await this.runWithTransientGitRetry(command, fallbackArgs, { cwd, timeout: timeoutMs, env });
           return { ...installResult(command, fallbackArgs, stdout, stderr, true, true), fallbackReason: 'Committed npm lockfile is out of sync and strict peer dependency resolution failed.' };
         }
       }
       if (!/\bERESOLVE\b/.test(output)) throw error;
       const fallbackArgs = [...args, '--legacy-peer-deps'];
-      const { stdout, stderr } = await execFileAsync(command, fallbackArgs, { cwd, timeout: timeoutMs, env });
+      const { stdout, stderr } = await this.runWithTransientGitRetry(command, fallbackArgs, { cwd, timeout: timeoutMs, env });
       return { ...installResult(command, fallbackArgs, stdout, stderr, true, false), fallbackReason: 'Strict npm dependency resolution failed with ERESOLVE.' };
     }
+  }
+
+  private async runWithTransientGitRetry(
+    command: string,
+    args: string[],
+    options: { cwd?: string; timeout?: number; env?: NodeJS.ProcessEnv },
+  ) {
+    return withTransientGitRetry(
+      () => execFileAsync(command, args, { ...options, encoding: 'utf8' as const }),
+      {
+        onRetry: ({ attempt, nextAttempt, delayMs }) => {
+          console.warn(`Transient Git/SSH failure while running ${command}; retrying attempt ${nextAttempt}/3 after ${delayMs}ms (attempt ${attempt} failed).`);
+        },
+      },
+    );
   }
 
   async checkoutBranch(cwd: string, branchName: string, baseBranch: string) {
@@ -125,6 +167,46 @@ export class SystemGitAdapter implements GitAdapter {
     if (!currentEmail) await this.run(cwd, ['config', 'user.email', process.env.AUTODEVOPS_GIT_EMAIL || 'autodevops-agent@example.local']);
     if (!currentName) await this.run(cwd, ['config', 'user.name', process.env.AUTODEVOPS_GIT_NAME || 'AutoDevOps Agent']);
   }
+}
+
+export function materializeWorkspaceAlias(workspaceRoot: string, projectName: string, targetPath: string) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(projectName) || projectName === '.' || projectName === '..') {
+    throw new Error(`Project name cannot be used as a workspace alias: ${projectName}`);
+  }
+  assertInsideWorkspace(workspaceRoot, targetPath);
+  const aliasPath = resolve(workspaceRoot, projectName);
+  assertInsideWorkspace(workspaceRoot, aliasPath);
+  if (aliasPath === resolve(targetPath)) return aliasPath;
+
+  if (existsSync(aliasPath)) {
+    const entry = lstatSync(aliasPath);
+    if (entry.isSymbolicLink() && realpathSync(aliasPath) === realpathSync(targetPath)) return aliasPath;
+    throw new Error(`Workspace alias already exists and does not point to this project: ${projectName}`);
+  }
+
+  symlinkSync(resolve(targetPath), aliasPath, process.platform === 'win32' ? 'junction' : 'dir');
+  return aliasPath;
+}
+
+export function localFileDependencyPaths(cwd: string, workspaceRoot: string) {
+  const manifestPath = join(cwd, 'package.json');
+  if (!existsSync(manifestPath)) return [];
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+  const dependencyGroups = ['dependencies', 'devDependencies', 'optionalDependencies']
+    .map((key) => manifest[key])
+    .filter((group): group is Record<string, unknown> => Boolean(group && typeof group === 'object' && !Array.isArray(group)));
+  const paths = new Set<string>();
+  for (const group of dependencyGroups) {
+    for (const specifier of Object.values(group)) {
+      if (typeof specifier !== 'string' || !specifier.startsWith('file:')) continue;
+      const candidate = resolve(cwd, specifier.slice('file:'.length));
+      if (!existsSync(join(candidate, 'package.json'))) continue;
+      const canonicalPath = realpathSync(candidate);
+      assertInsideWorkspace(workspaceRoot, canonicalPath);
+      paths.add(canonicalPath);
+    }
+  }
+  return [...paths].sort();
 }
 
 function assertInsideWorkspace(workspaceRoot: string, targetPath: string) {

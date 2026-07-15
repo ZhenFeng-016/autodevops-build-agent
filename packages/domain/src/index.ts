@@ -12,7 +12,7 @@ export type CodexFixStatus = 'draft' | 'pending_review' | 'approved' | 'pipeline
 export type ServerRole = 'platform' | 'build' | 'runtime' | 'observability';
 export type AgentStatus = 'online' | 'offline' | 'degraded' | 'disabled';
 export type JobStatus = 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled';
-export type JobType = 'repo.inspect' | 'repo.sync' | 'repo.install' | 'jenkins.pipeline.run' | 'codex.incident.analyze' | 'codex.fix.create_patch' | 'codex.fix.merge_to_production' | 'observability.preflight';
+export type JobType = 'repo.inspect' | 'repo.sync' | 'repo.install' | 'jenkins.pipeline.run' | 'codex.incident.analyze' | 'codex.fix.create_patch' | 'codex.fix.merge_to_production' | 'observability.preflight' | 'runtime.cleanup';
 export interface Project {
     id: string;
     name: string;

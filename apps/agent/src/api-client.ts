@@ -57,6 +57,7 @@ export const AGENT_CAPABILITIES = [
   'repo.write',
   'incident.analyze',
   'observability.preflight',
+  'runtime.cleanup',
 ] as const;
 
 export type ClaimedAgentJob = ClaimedJob | { claimed: false };
