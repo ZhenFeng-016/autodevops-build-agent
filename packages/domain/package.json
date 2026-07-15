@@ -1,6 +1,6 @@
 {
   "name": "@zhenfengxx/contracts",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Runtime-validated Agent/API DTOs and protocol schemas for AutoDevOps.",
   "license": "MIT",
   "repository": {

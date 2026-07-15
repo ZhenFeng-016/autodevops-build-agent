@@ -1,5 +1,14 @@
 # @zhenfengxx/build-agent
 
+## 1.2.1
+
+### Patch Changes
+
+- 35fe727: Prepare local `file:` package dependencies recursively before installing an application workspace.
+- 35fe727: Retry transient Git and SSH transport failures during repository synchronization and dependency installation without retrying permanent authentication failures.
+- 35fe727: Add the `runtime.cleanup` job type and BuildAgent executor for safe remote project cleanup.
+- 35fe727: Expose ID-based project checkouts through safe project-name workspace aliases so sibling `file:../package` dependencies resolve on build agents.
+
 ## 1.2.0
 
 ### Minor Changes
