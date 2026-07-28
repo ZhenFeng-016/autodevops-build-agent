@@ -22,7 +22,7 @@ export class ControlPlaneClient {
     return this.client.heartbeat(body);
   }
 
-  claimJob(leaseSeconds = 900) {
+  claimJob(leaseSeconds = this.config.leaseSeconds) {
     return this.client.claimJob({ protocolVersion: PROTOCOL_VERSION, capabilities: [...AGENT_CAPABILITIES], leaseSeconds });
   }
 
@@ -58,6 +58,8 @@ export const AGENT_CAPABILITIES = [
   'incident.analyze',
   'observability.preflight',
   'runtime.cleanup',
+  'runtime-config-lease-v1',
+  'runtime-config-probe-v1',
 ] as const;
 
 export type ClaimedAgentJob = ClaimedJob | { claimed: false };

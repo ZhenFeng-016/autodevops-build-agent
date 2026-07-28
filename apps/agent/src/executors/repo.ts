@@ -5,6 +5,9 @@ import { createRuntimeContract, inspectRepository } from '@zhenfengxx/repo-inspe
 import { looksSecret, requireProject, requireTargetServer, stringArray, stringValue } from '../common.js';
 import type { ExecutorDependencies } from './types.js';
 
+const DEFAULT_REPO_INSTALL_TIMEOUT_MS = 60 * 60 * 1_000;
+const DEFAULT_REPO_SYNC_TIMEOUT_MS = 3 * 60 * 1_000;
+
 export async function executeRepoInspect(job: Job, dependencies: ExecutorDependencies) {
   const project = requireProject(job.params.project);
   const gitRef = stringValue(job.params.gitRef) || project.developmentBranch || project.defaultBranch;
@@ -53,7 +56,7 @@ async function executeRepoDelivery(job: Job, dependencies: ExecutorDependencies,
   const project = requireProject(job.params.project);
   const targetServer = requireTargetServer(job.params.targetServer);
   const gitRef = stringValue(job.params.gitRef) || project.developmentBranch || project.defaultBranch;
-  const timeoutMs = Number(job.params.timeoutMs ?? (install ? 600_000 : 180_000));
+  const timeoutMs = Number(job.params.timeoutMs ?? (install ? DEFAULT_REPO_INSTALL_TIMEOUT_MS : DEFAULT_REPO_SYNC_TIMEOUT_MS));
   if (dependencies.remote.isLocal(targetServer)) {
     const workspacePath = await dependencies.git.syncWorkspace(project, gitRef, resolve(dependencies.config.workspaceRoot, project.id));
     const installResult = install ? await dependencies.git.installDependencies(workspacePath, timeoutMs) : undefined;

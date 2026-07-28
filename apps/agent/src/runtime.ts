@@ -11,6 +11,7 @@ import type { AgentConfig } from './config.js';
 import { executeJob, type ExecutorDependencies } from './executors/index.js';
 import { protocolIdentity } from './identity.js';
 import { ReadinessService } from './readiness.js';
+import { AGENT_FEATURES, targetSshIdentity } from './target-ssh-identity.js';
 
 export class AgentRuntime {
   constructor(
@@ -27,7 +28,7 @@ export class AgentRuntime {
     while (true) {
       try {
         await this.heartbeat();
-        const claim = await this.client.claimJob();
+        const claim = await this.client.claimJob(this.config.leaseSeconds);
         if ('claimed' in claim && claim.claimed === false) {
           if (this.config.runOnce) break;
           await sleep(this.config.pollIntervalMs);
@@ -60,6 +61,8 @@ export class AgentRuntime {
         hostname: hostname(),
         codexHome: process.env.CODEX_HOME,
         serviceManager: this.config.serviceManager,
+        features: [...AGENT_FEATURES],
+        targetSsh: targetSshIdentity(this.config),
       },
       ...identity,
     });
@@ -79,6 +82,8 @@ export class AgentRuntime {
         workspaceRoot: this.config.workspaceRoot,
         hostname: hostname(),
         codexSkills: await this.readiness.codexSkills(),
+        features: [...AGENT_FEATURES],
+        targetSsh: targetSshIdentity(this.config),
       },
       ...identity,
     });

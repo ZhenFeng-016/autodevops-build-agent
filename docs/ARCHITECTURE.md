@@ -16,7 +16,8 @@ loads host configuration and composes `AgentRuntime` with these modules:
   by the observability preflight job.
 - `adapters/git.ts`: safe workspace checkout, dependency installation and Git
   branch/commit/merge operations.
-- `adapters/ssh.ts`: remote repository synchronization and installation.
+- `adapters/ssh.ts`: remote repository synchronization, installation, runtime
+  cleanup, and BuildAgent-to-target SSH tests.
 - `adapters/jenkins.ts`: Jenkins pipeline execution.
 - `adapters/codex.ts`: Codex incident analysis and patch generation.
 - `executors/*`: runtime-validated implementations of every protocol-v1 job.
@@ -37,10 +38,25 @@ implementations.
 - `codex.fix.create_patch`
 - `codex.fix.merge_to_production`
 - `observability.preflight`
+- `runtime.cleanup`
+- `server.ssh.test`
 
 Job envelopes and job-specific parameters are validated at runtime before an
 executor is called. Unsupported or malformed jobs fail explicitly and are
 reported to the control plane.
+
+## Target-host SSH identity
+
+`AUTODEVOPS_TARGET_SSH_KEY_PATH` configures the key used for the outer SSH hop
+from the BuildAgent host to runtime servers. It is intentionally separate from
+`AUTODEVOPS_GIT_SSH_KEY_PATH`, which authenticates Git fetches and may be copied
+temporarily into a remote workspace during repository synchronization.
+
+The Agent reports the target key's public half and OpenSSH SHA256 fingerprint
+in heartbeat metadata together with the `server.ssh.test` feature marker. The
+private key remains on the BuildAgent host. Control planes can use that public
+key to provision and verify explicit build-server-to-runtime associations
+without extending protocol-v1 capability negotiation.
 
 ## CLI contract
 

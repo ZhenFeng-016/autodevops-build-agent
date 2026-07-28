@@ -13,6 +13,8 @@ export const AgentCapabilityValues = [
   'incident.analyze',
   'observability.preflight',
   'runtime.cleanup',
+  'runtime-config-lease-v1',
+  'runtime-config-probe-v1',
 ] as const;
 
 export const AgentCapabilitySchema = z.enum(AgentCapabilityValues);
@@ -87,6 +89,8 @@ export const JobTypeSchema = z.enum([
   'codex.fix.merge_to_production',
   'observability.preflight',
   'runtime.cleanup',
+  'server.ssh.test',
+  'runtime.config.test',
 ]);
 
 const ProjectJobParamsSchema = z.object({
@@ -105,6 +109,19 @@ export const JobParamsEnvelopeSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('codex.fix.merge_to_production'), params: z.object({ fix: z.record(z.string(), z.unknown()) }).passthrough() }),
   z.object({ type: z.literal('observability.preflight'), params: z.record(z.string(), z.unknown()) }),
   z.object({ type: z.literal('runtime.cleanup'), params: ProjectJobParamsSchema.extend({ targetServer: z.record(z.string(), z.unknown()), cleanup: z.record(z.string(), z.unknown()) }) }),
+  z.object({ type: z.literal('server.ssh.test'), params: z.object({ targetServer: z.record(z.string(), z.unknown()), timeoutMs: z.number().int().positive().optional() }).passthrough() }),
+  z.object({
+    type: z.literal('runtime.config.test'),
+    params: z.object({
+      configId: z.string().min(1),
+      revision: z.number().int().positive(),
+      kind: z.enum(['oak_postgres', 'oak_mysql', 'oak_redis']),
+      targetPath: z.string().min(1),
+      targetServer: z.record(z.string(), z.unknown()),
+      runtimeConfig: z.record(z.string(), z.unknown()),
+      timeoutMs: z.number().int().positive().optional(),
+    }).passthrough(),
+  }),
 ]);
 export type JobParamsEnvelope = z.infer<typeof JobParamsEnvelopeSchema>;
 

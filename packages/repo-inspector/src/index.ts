@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { v7 as uuidv7 } from 'uuid';
-import type { DeployDriver, DeployPackaging, OakDetection, Project, RepoInspection, RuntimeContract } from '@zhenfengxx/contracts';
+import type { DeployDriver, DeployPackaging, ManagedRuntimeConfigKind, ManagedRuntimeConfigRequirement, OakDetection, Project, RepoInspection, RuntimeContract } from '@zhenfengxx/contracts';
 
 export type { OakDetection, Project, RepoInspection, RuntimeContract } from '@zhenfengxx/contracts';
 
@@ -39,6 +40,32 @@ export const OAK_SOURCE_MARKERS = [
 export const OAK_CODEGEN_SCRIPT_ORDER = ['project:init', 'make:domain', 'make:locale', 'make:dep'];
 export const OAK_VALIDATION_SCRIPT_ORDER = ['check', 'build:lib', 'build:es'];
 
+const RUNTIME_CONFIG_DEFINITIONS: ReadonlyArray<{
+  kind: ManagedRuntimeConfigKind;
+  templatePath: string;
+  targetPath: string;
+  defaultRequiredAt: ManagedRuntimeConfigRequirement['requiredAt'];
+}> = [
+  { kind: 'oak_postgres', templatePath: 'configuration/postgres.example.json', targetPath: 'configuration/postgres.json', defaultRequiredAt: 'runtime' },
+  { kind: 'oak_mysql', templatePath: 'configuration/mysql.example.json', targetPath: 'configuration/mysql.json', defaultRequiredAt: 'runtime' },
+  { kind: 'oak_redis', templatePath: 'configuration/redis.example.json', targetPath: 'configuration/redis.json', defaultRequiredAt: 'runtime' },
+];
+
+const DATABASE_CONFIG_CANDIDATES = [
+  'configuration/postgres.json',
+  'configuration/postgres.dev.json',
+  'configuration/postgres.prod.json',
+  'configuration/postgres.development.json',
+  'configuration/postgres.staging.json',
+  'configuration/postgres.production.json',
+  'configuration/mysql.json',
+  'configuration/mysql.dev.json',
+  'configuration/mysql.prod.json',
+  'configuration/mysql.development.json',
+  'configuration/mysql.staging.json',
+  'configuration/mysql.production.json',
+];
+
 export function inspectRepository(projectId: string, repositoryPath: string): RepoInspection {
   const packageJson = readPackageJson(repositoryPath);
   const scripts = normalizeScripts(packageJson?.scripts);
@@ -55,14 +82,8 @@ export function inspectRepository(projectId: string, repositoryPath: string): Re
   const pm2Configs = ['ecosystem.config.js', 'ecosystem.config.cjs', 'ecosystem.config.mjs', 'ecosystem.json'].filter((item) =>
     existsSync(join(repositoryPath, item)),
   );
-  const oakDatabaseConfigFiles = [
-    'configuration/postgres.json',
-    'configuration/postgres.dev.json',
-    'configuration/postgres.prod.json',
-    'configuration/mysql.json',
-    'configuration/mysql.dev.json',
-    'configuration/mysql.prod.json',
-  ].filter((item) => existsSync(join(repositoryPath, item)));
+  const oakDatabaseConfigFiles = DATABASE_CONFIG_CANDIDATES.filter((item) => existsSync(join(repositoryPath, item)));
+  const runtimeConfigRequirements = inspectRuntimeConfigRequirements(repositoryPath, oakDatabaseConfigFiles);
   const oakInitializationScript = existsSync(join(repositoryPath, 'scripts/initServer.js')) ? 'scripts/initServer.js' : undefined;
 
   return {
@@ -82,9 +103,11 @@ export function inspectRepository(projectId: string, repositoryPath: string): Re
         ...oakSourceMarkers.map((item) => `source:${item}`),
         ...Object.keys(oakScripts).map((item) => `script:${item}`),
         ...oakDatabaseConfigFiles.map((item) => `database-config:${item}`),
+        ...runtimeConfigRequirements.flatMap((item) => item.evidence),
         ...(oakInitializationScript ? [`database-init:${oakInitializationScript}`] : []),
       ],
       databaseConfigFiles: oakDatabaseConfigFiles,
+      runtimeConfigRequirements,
       initializationScript: oakInitializationScript,
     },
     framework: oakDetected ? 'oak' : packageJson ? 'node' : 'unknown',
@@ -121,6 +144,10 @@ export function createRuntimeContract(project: Project, inspection: RepoInspecti
   const fallbackValidation = validationCommands.length ? validationCommands : inspection.scripts.test ? [script('test')] : [];
   const frontendBuildCommand = inspection.scripts.build ? script('build') : undefined;
   const healthPath = project.healthPath;
+  const runtimeConfigRequirements = inspection.oak.runtimeConfigRequirements ?? [];
+  const databaseConfigurationFiles = runtimeConfigRequirements
+    .filter((item) => item.kind === 'oak_postgres' || item.kind === 'oak_mysql')
+    .map((item) => item.targetPath);
 
   return {
     id: overrides.id ?? newEntityId(),
@@ -187,9 +214,16 @@ export function createRuntimeContract(project: Project, inspection: RepoInspecti
         project.databaseInitMode === 'init_on_first_deploy'
           ? ['Data initialization is intended only for first deployment and still requires explicit user approval before execution.']
           : ['Data initialization is disabled by default. Do not infer or run seed/init/reset commands during deployment.'],
-      connectionSource: inspection.oak.detected && inspection.oak.databaseConfigFiles.length ? 'oak_configuration' : 'unknown',
-      configurationFiles: inspection.oak.databaseConfigFiles,
+      connectionSource: inspection.oak.detected && databaseConfigurationFiles.length ? 'oak_configuration' : 'unknown',
+      configurationFiles: databaseConfigurationFiles.length ? databaseConfigurationFiles : inspection.oak.databaseConfigFiles,
       ...overrides.database,
+    },
+    runtimeConfig: {
+      requirements: runtimeConfigRequirements,
+      notes: runtimeConfigRequirements.length
+        ? ['Real configuration values are platform-managed; repository example files describe shape only.']
+        : [],
+      ...overrides.runtimeConfig,
     },
     environmentConfig: {
       envFileName: '.env.production',
@@ -210,6 +244,90 @@ export function createRuntimeContract(project: Project, inspection: RepoInspecti
       ...(overrides.requiresApproval ?? []),
     ],
   };
+}
+
+function inspectRuntimeConfigRequirements(repositoryPath: string, databaseConfigFiles: string[]): ManagedRuntimeConfigRequirement[] {
+  const sourceFiles = collectSourceFiles(join(repositoryPath, 'src'));
+  return RUNTIME_CONFIG_DEFINITIONS.flatMap((definition) => {
+    const templateExists = existsSync(join(repositoryPath, definition.templatePath));
+    const existingRuntimeFile = existsSync(join(repositoryPath, definition.targetPath));
+    const relatedDatabaseFile = definition.kind === 'oak_postgres'
+      ? databaseConfigFiles.some((item) => item.startsWith('configuration/postgres.')) || databaseConfigFiles.includes(definition.targetPath)
+      : definition.kind === 'oak_mysql'
+        ? databaseConfigFiles.some((item) => item.startsWith('configuration/mysql.')) || databaseConfigFiles.includes(definition.targetPath)
+        : false;
+    const staticReference = sourceFiles.find((file) => sourceReferencesPath(file, definition.targetPath));
+    if (!templateExists && !existingRuntimeFile && !relatedDatabaseFile && !staticReference) return [];
+    const trackedRuntimeFile = gitPathMatches(repositoryPath, ['ls-files', '--error-unmatch', '--', definition.targetPath]);
+    const gitIgnored = gitPathMatches(repositoryPath, ['check-ignore', '-q', '--', definition.targetPath]);
+    const evidence = [
+      ...(templateExists ? [`runtime-config-template:${definition.templatePath}`] : []),
+      ...(existingRuntimeFile || relatedDatabaseFile ? [`runtime-config-file:${definition.targetPath}`] : []),
+      ...(staticReference ? [`runtime-config-import:${relativeEvidencePath(repositoryPath, staticReference)}`] : []),
+      ...(trackedRuntimeFile ? [`runtime-config-tracked:${definition.targetPath}`] : []),
+      ...(!gitIgnored ? [`runtime-config-not-ignored:${definition.targetPath}`] : []),
+    ];
+    return [{
+      kind: definition.kind,
+      adapterVersion: 1 as const,
+      templatePath: templateExists ? definition.templatePath : undefined,
+      targetPath: definition.targetPath,
+      requiredAt: staticReference ? 'build_and_runtime' as const : definition.defaultRequiredAt,
+      required: true,
+      evidence,
+      templateKeys: templateExists ? readTemplateKeys(join(repositoryPath, definition.templatePath)) : [],
+      existingRuntimeFile,
+      trackedRuntimeFile,
+      gitIgnored,
+    }];
+  });
+}
+
+function collectSourceFiles(root: string): string[] {
+  if (!existsSync(root)) return [];
+  const files: string[] = [];
+  const visit = (directory: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name === 'lib' || entry.name === 'es' || entry.name === 'dist') continue;
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (/\.(?:[cm]?[jt]sx?)$/i.test(entry.name)) files.push(path);
+    }
+  };
+  visit(root);
+  return files;
+}
+
+function sourceReferencesPath(file: string, targetPath: string) {
+  const normalizedTarget = targetPath.replace(/\\/g, '/');
+  const targetName = normalizedTarget.split('/').at(-1) ?? normalizedTarget;
+  try {
+    const source = readFileSync(file, 'utf8').replace(/\\/g, '/');
+    return source.includes(normalizedTarget) || source.includes(`/configuration/${targetName}`) || source.includes(`configuration/${targetName}`);
+  }
+  catch {
+    return false;
+  }
+}
+
+function readTemplateKeys(path: string): string[] {
+  try {
+    const value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+    return Object.keys(value as Record<string, unknown>).sort();
+  }
+  catch {
+    return [];
+  }
+}
+
+function gitPathMatches(root: string, args: string[]) {
+  const result = spawnSync('git', ['-C', root, ...args], { stdio: 'ignore', windowsHide: true });
+  return result.status === 0;
+}
+
+function relativeEvidencePath(root: string, path: string) {
+  return path.slice(root.length).replace(/^[/\\]+/, '').replace(/\\/g, '/');
 }
 
 function userSelectedDeployMode(project: Project): { driver: DeployDriver; packaging: DeployPackaging } | undefined {

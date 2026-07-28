@@ -65,13 +65,21 @@ export function isLoopbackHost(value?: string) {
 }
 
 export function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  const output = commandErrorOutput(error);
+  if (output.length <= 8_000) return output;
+  const base = basicErrorMessage(error);
+  const remaining = Math.max(0, 8_000 - base.length - 32);
+  return `${base}\n...[command output truncated]...\n${output.slice(-remaining)}`;
 }
 
 export function commandErrorOutput(error: unknown) {
-  if (!error || typeof error !== 'object') return errorMessage(error);
+  if (!error || typeof error !== 'object') return basicErrorMessage(error);
   const candidate = error as { message?: string; stdout?: string; stderr?: string };
-  return [candidate.message, candidate.stdout, candidate.stderr].filter(Boolean).join('\n');
+  return [candidate.message ?? basicErrorMessage(error), candidate.stdout, candidate.stderr].filter(Boolean).join('\n');
+}
+
+function basicErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function sleep(ms: number) {

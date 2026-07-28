@@ -6,6 +6,7 @@ import type { Project } from '@zhenfengxx/contracts';
 import { commandErrorOutput, stringValue } from '../common.js';
 import type { AgentConfig } from '../config.js';
 import { gitHead } from '../identity.js';
+import { execFileWithProcessTree } from '../process-execution.js';
 import { withTransientGitRetry } from '../transient-git-retry.js';
 
 const execFileAsync = promisify(execFile);
@@ -75,6 +76,17 @@ export class SystemGitAdapter implements GitAdapter {
           ? ['ci', '--include=dev']
           : ['install', '--include=dev', '--package-lock=false'];
     const env = { ...process.env, NODE_ENV: 'development', npm_config_omit: '' };
+    if (command === 'npm' && shouldIsolateOakDependencyScripts(readManifest(cwd))) {
+      const isolatedArgs = [...args, '--legacy-peer-deps', '--ignore-scripts'];
+      const { stdout, stderr } = await this.runWithTransientGitRetry(command, isolatedArgs, { cwd, timeout: timeoutMs, env });
+      const rootPostinstall = await this.runRootPostinstall(cwd, timeoutMs, env);
+      return {
+        ...installResult(command, isolatedArgs, stdout, stderr, true, false),
+        dependencyScriptsSkipped: true,
+        rootPostinstall,
+        fallbackReason: 'Oak Git dependencies use development-time sibling file references; dependency lifecycle scripts were isolated.',
+      };
+    }
     try {
       const { stdout, stderr } = await this.runWithTransientGitRetry(command, args, { cwd, timeout: timeoutMs, env });
       return installResult(command, args, stdout, stderr, false, false);
@@ -100,13 +112,26 @@ export class SystemGitAdapter implements GitAdapter {
     }
   }
 
+  private async runRootPostinstall(cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv) {
+    const scripts = objectRecord(readManifest(cwd).scripts);
+    if (typeof scripts.postinstall !== 'string' || !scripts.postinstall.trim()) {
+      return { skipped: true, reason: 'No root postinstall script found.' };
+    }
+    const args = ['run', 'postinstall'];
+    const { stdout, stderr } = await execFileWithProcessTree('npm', args, { cwd, timeout: timeoutMs, env });
+    return installResult('npm', args, stdout, stderr, false, false);
+  }
+
   private async runWithTransientGitRetry(
     command: string,
     args: string[],
     options: { cwd?: string; timeout?: number; env?: NodeJS.ProcessEnv },
   ) {
+    const packageManagerCommand = command === 'npm' || command === 'pnpm' || command === 'yarn';
     return withTransientGitRetry(
-      () => execFileAsync(command, args, { ...options, encoding: 'utf8' as const }),
+      () => packageManagerCommand
+        ? execFileWithProcessTree(command, args, options)
+        : execFileAsync(command, args, { ...options, encoding: 'utf8' as const }),
       {
         onRetry: ({ attempt, nextAttempt, delayMs }) => {
           console.warn(`Transient Git/SSH failure while running ${command}; retrying attempt ${nextAttempt}/3 after ${delayMs}ms (attempt ${attempt} failed).`);
@@ -167,6 +192,23 @@ export class SystemGitAdapter implements GitAdapter {
     if (!currentEmail) await this.run(cwd, ['config', 'user.email', process.env.AUTODEVOPS_GIT_EMAIL || 'autodevops-agent@example.local']);
     if (!currentName) await this.run(cwd, ['config', 'user.name', process.env.AUTODEVOPS_GIT_NAME || 'AutoDevOps Agent']);
   }
+}
+
+export function shouldIsolateOakDependencyScripts(manifest: Record<string, unknown>) {
+  const oak = objectRecord(manifest.oak);
+  const devDependencies = objectRecord(manifest.devDependencies);
+  const cliSpecifier = devDependencies['@xuchangzju/oak-cli'];
+  return Object.keys(oak).length > 0
+    && typeof cliSpecifier === 'string'
+    && /^(?:git\+ssh|git\+https|ssh:|git@)/i.test(cliSpecifier);
+}
+
+function readManifest(cwd: string) {
+  return JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')) as Record<string, unknown>;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 export function materializeWorkspaceAlias(workspaceRoot: string, projectName: string, targetPath: string) {

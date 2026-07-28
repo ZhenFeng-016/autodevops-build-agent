@@ -1,12 +1,14 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import type { Project } from '@zhenfengxx/contracts';
+import type { ManagedRuntimeConfigKind, Project } from '@zhenfengxx/contracts';
 import { isLoopbackHost, shellQuote, splitShellWords, type CommandResult, type TargetServer } from '../common.js';
 import type { AgentConfig } from '../config.js';
 
 export interface RemoteAdapter {
   syncProject(project: Project, server: TargetServer, gitRef: string, install: boolean, timeoutMs: number): Promise<CommandResult & { targetPath: string }>;
   cleanupRuntime(project: Project, server: TargetServer, cleanup: RuntimeCleanupSpec, timeoutMs: number): Promise<CommandResult>;
+  testConnection(server: TargetServer, timeoutMs: number): Promise<CommandResult>;
+  probeRuntimeConfig(server: TargetServer, targetPath: string, kind: ManagedRuntimeConfigKind, config: Record<string, unknown>, timeoutMs: number): Promise<CommandResult>;
   targetPath(project: Project, server: TargetServer): string;
   isLocal(server: TargetServer): boolean;
 }
@@ -25,6 +27,10 @@ export type RuntimeCleanupAlias = {
   target: string;
 };
 
+const REMOTE_TIMEOUT_KILL_AFTER_SECONDS = 15;
+const TRANSPORT_TIMEOUT_GRACE_MS = 20_000;
+const TRANSPORT_FORCE_KILL_MS = 5_000;
+
 export class SshRemoteAdapter implements RemoteAdapter {
   constructor(private readonly config: AgentConfig) {}
 
@@ -36,6 +42,14 @@ export class SshRemoteAdapter implements RemoteAdapter {
 
   async cleanupRuntime(project: Project, server: TargetServer, cleanup: RuntimeCleanupSpec, timeoutMs: number) {
     return this.run(server, runtimeCleanupScript(project.id, cleanup), timeoutMs);
+  }
+
+  async testConnection(server: TargetServer, timeoutMs: number) {
+    return this.run(server, 'set -euo pipefail\nprintf "connected:%s:%s\\n" "$(hostname)" "$(id -un)"', timeoutMs);
+  }
+
+  async probeRuntimeConfig(server: TargetServer, targetPath: string, kind: ManagedRuntimeConfigKind, config: Record<string, unknown>, timeoutMs: number) {
+    return this.run(server, runtimeConfigProbeScript(targetPath, kind, config), timeoutMs);
   }
 
   targetPath(project: Project, server: TargetServer) {
@@ -51,20 +65,24 @@ export class SshRemoteAdapter implements RemoteAdapter {
   }
 
   private run(server: TargetServer, script: string, timeoutMs: number) {
-    const args = sshArgsForServer(server, this.config.gitSshKeyPath);
+    const args = sshArgsForServer(server, this.config.targetSshKeyPath ?? this.config.gitSshKeyPath);
     return new Promise<CommandResult>((resolvePromise) => {
-      const child = spawn('ssh', [...args, 'bash', '-s'], { stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn('ssh', [...args, ...remoteCommandArgs(timeoutMs)], { stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
+      let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
       const timer = setTimeout(() => {
-        stderr += `\nRemote command timed out after ${timeoutMs}ms.`;
+        stderr += `\nRemote command transport did not exit after ${timeoutMs}ms plus ${TRANSPORT_TIMEOUT_GRACE_MS}ms grace.`;
         child.kill('SIGTERM');
-      }, timeoutMs);
+        forceKillTimer = setTimeout(() => child.kill('SIGKILL'), TRANSPORT_FORCE_KILL_MS);
+      }, timeoutMs + TRANSPORT_TIMEOUT_GRACE_MS);
       child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
       child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
       child.on('error', (error) => { stderr += `\n${error.message}`; });
       child.on('close', (code) => {
         clearTimeout(timer);
+        if (forceKillTimer) clearTimeout(forceKillTimer);
+        if (code === 124) stderr += `\nRemote command timed out after ${timeoutMs}ms.`;
         resolvePromise({ stdout, stderr, code });
       });
       child.stdin.end(script);
@@ -72,14 +90,132 @@ export class SshRemoteAdapter implements RemoteAdapter {
   }
 }
 
-function sshArgsForServer(server: TargetServer, gitSshKeyPath?: string) {
-  if (server.sshAuthType === 'system_default' && server.sshTarget) return splitShellWords(server.sshTarget.replace(/^ssh\s+/, ''));
+export function runtimeConfigProbeScript(targetPath: string, kind: ManagedRuntimeConfigKind, config: Record<string, unknown>) {
+  const encodedConfig = Buffer.from(JSON.stringify(config), 'utf8').toString('base64');
+  return [
+    'set -euo pipefail',
+    'umask 077',
+    `target=${shellQuote(targetPath)}`,
+    `config_kind=${shellQuote(kind)}`,
+    'case "$target" in /*) ;; *) echo "Runtime config probe target must be absolute." >&2; exit 72 ;; esac',
+    'if [ ! -d "$target" ] || [ ! -f "$target/package.json" ]; then echo "Runtime config probe target is not a Node.js project." >&2; exit 72; fi',
+    'probe_dir="$(mktemp -d)"',
+    'trap \'rm -rf "$probe_dir"\' EXIT HUP INT TERM',
+    `printf %s ${shellQuote(encodedConfig)} | base64 -d > "$probe_dir/config.json"`,
+    'chmod 600 "$probe_dir/config.json"',
+    'cd "$target"',
+    'RUNTIME_CONFIG_KIND="$config_kind" RUNTIME_CONFIG_PATH="$probe_dir/config.json" node <<\'NODE\'',
+    runtimeConfigProbeNodeProgram(),
+    'NODE',
+  ].join('\n');
+}
+
+function runtimeConfigProbeNodeProgram() {
+  return String.raw`const fs = require('node:fs');
+const net = require('node:net');
+const kind = process.env.RUNTIME_CONFIG_KIND;
+const config = JSON.parse(fs.readFileSync(process.env.RUNTIME_CONFIG_PATH, 'utf8'));
+
+async function probePostgres() {
+  const { Client } = require('pg');
+  const client = new Client({ ...config, connectionTimeoutMillis: Number(config.connectionTimeoutMillis || 10000) });
+  try {
+    await client.connect();
+    await client.query('SELECT 1');
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
+
+async function probeMysql() {
+  const mysql = require('mysql2/promise');
+  const connection = await mysql.createConnection({ ...config, connectTimeout: Number(config.connectTimeout || 10000) });
+  try {
+    await connection.query('SELECT 1');
+  } finally {
+    await connection.end();
+  }
+}
+
+function redisCommand(socket, args) {
+  const payload = '*' + args.length + '\r\n' + args.map((value) => {
+    const text = String(value);
+    return '$' + Buffer.byteLength(text) + '\r\n' + text + '\r\n';
+  }).join('');
+  return new Promise((resolve, reject) => {
+    let buffer = Buffer.alloc(0);
+    const cleanup = () => {
+      socket.off('data', onData);
+      socket.off('error', onError);
+    };
+    const onError = (error) => { cleanup(); reject(error); };
+    const onData = (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      const end = buffer.indexOf('\r\n');
+      if (end < 0) return;
+      const line = buffer.subarray(0, end).toString('utf8');
+      if (!line) return;
+      cleanup();
+      if (line[0] === '-') reject(new Error('Redis rejected the probe: ' + line.slice(1)));
+      else resolve(line);
+    };
+    socket.on('data', onData);
+    socket.on('error', onError);
+    socket.write(payload);
+  });
+}
+
+async function probeRedis() {
+  const socket = net.createConnection({ host: config.host, port: Number(config.port || 6379) });
+  socket.setTimeout(Number(config.connectTimeout || 10000), () => socket.destroy(new Error('Redis connection timed out')));
+  try {
+    await new Promise((resolve, reject) => {
+      socket.once('connect', resolve);
+      socket.once('error', reject);
+    });
+    if (config.password) await redisCommand(socket, config.username ? ['AUTH', config.username, config.password] : ['AUTH', config.password]);
+    if (config.db !== undefined && config.db !== null) await redisCommand(socket, ['SELECT', config.db]);
+    await redisCommand(socket, ['PING']);
+  } finally {
+    socket.destroy();
+  }
+}
+
+(async () => {
+  if (kind === 'oak_postgres') await probePostgres();
+  else if (kind === 'oak_mysql') await probeMysql();
+  else if (kind === 'oak_redis') await probeRedis();
+  else throw new Error('Unsupported runtime config kind');
+  process.stdout.write('runtime_config_probe:success:' + kind + '\n');
+})().catch((error) => {
+  process.stderr.write('runtime_config_probe:failed:' + (error && error.message ? error.message : 'unknown error') + '\n');
+  process.exitCode = 1;
+});`;
+}
+
+export function remoteCommandArgs(timeoutMs: number) {
+  const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1_000));
+  return [
+    'timeout',
+    '--signal=TERM',
+    `--kill-after=${REMOTE_TIMEOUT_KILL_AFTER_SECONDS}s`,
+    `${timeoutSeconds}s`,
+    'bash',
+    '-s',
+  ];
+}
+
+export function sshArgsForServer(server: TargetServer, targetSshKeyPath?: string) {
+  const options = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=15'];
+  if (targetSshKeyPath) options.push('-i', targetSshKeyPath, '-o', 'IdentitiesOnly=yes');
+  if (server.sshAuthType === 'system_default' && server.sshTarget) {
+    return [...options, ...splitShellWords(server.sshTarget.replace(/^ssh\s+/, ''))];
+  }
   const platformForwarded = isLoopbackHost(server.sshHost) && server.host && !isLoopbackHost(server.host);
   const host = platformForwarded ? server.host : server.sshHost || server.host;
   const user = server.sshUser;
   if (!host || !user) throw new Error(`Server ${server.name} is missing sshHost/host or sshUser`);
-  const args = ['-p', String(platformForwarded ? 22 : server.sshPort ?? 22), '-o', 'StrictHostKeyChecking=accept-new'];
-  if (gitSshKeyPath) args.push('-i', gitSshKeyPath, '-o', 'IdentitiesOnly=yes');
+  const args = [...options, '-p', String(platformForwarded ? 22 : server.sshPort ?? 22)];
   args.push(`${user}@${host}`);
   return args;
 }
@@ -159,6 +295,14 @@ export function repoInstallScript(targetPath: string) {
   return [
     `cd ${shellQuote(targetPath)}`,
     'export NODE_ENV=development npm_config_omit=',
+    'is_oak_git_cli_project() {',
+    "  node -e 'const p=require(\"./package.json\"); const oak=p.oak && typeof p.oak===\"object\"; const cli=p.devDependencies?.[\"@xuchangzju/oak-cli\"]; process.exit(oak && typeof cli===\"string\" && /^(git\\+ssh|git\\+https|ssh:|git@)/i.test(cli) ? 0 : 1)'",
+    '}',
+    'npm_oak_isolated_install() {',
+    '  echo "Oak Git dependency layout detected; isolating dependency lifecycle scripts."',
+    '  run_with_git_retry "$@" --legacy-peer-deps --ignore-scripts',
+    '  npm run postinstall --if-present',
+    '}',
     'npm_with_peer_fallback() {',
     '  local npm_log npm_code',
     '  npm_log="$(mktemp)"',
@@ -180,9 +324,9 @@ export function repoInstallScript(targetPath: string) {
     '  return "$npm_code"',
     '}',
     'if [ -f pnpm-lock.yaml ] && command -v pnpm >/dev/null 2>&1; then run_with_git_retry pnpm install --frozen-lockfile --prod=false;',
-    'elif [ -f package-lock.json ] && git ls-files --error-unmatch -- package-lock.json >/dev/null 2>&1; then npm_with_peer_fallback npm ci --include=dev;',
+    'elif [ -f package-lock.json ] && git ls-files --error-unmatch -- package-lock.json >/dev/null 2>&1; then if is_oak_git_cli_project; then npm_oak_isolated_install npm ci --include=dev; else npm_with_peer_fallback npm ci --include=dev; fi;',
     'elif [ -f yarn.lock ] && command -v yarn >/dev/null 2>&1; then run_with_git_retry yarn install --frozen-lockfile --production=false;',
-    'elif [ -f package.json ]; then rm -f package-lock.json; npm_with_peer_fallback npm install --include=dev --package-lock=false;',
+    'elif [ -f package.json ]; then rm -f package-lock.json; if is_oak_git_cli_project; then npm_oak_isolated_install npm install --include=dev --package-lock=false; else npm_with_peer_fallback npm install --include=dev --package-lock=false; fi;',
     'else echo "No package.json found; dependency install skipped."; fi',
   ].join('\n');
 }

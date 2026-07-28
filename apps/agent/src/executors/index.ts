@@ -4,6 +4,8 @@ import { executeJenkinsRun } from './jenkins.js';
 import { executeObservabilityPreflight } from './observability.js';
 import { executeRepoInspect, executeRepoInstall, executeRepoSync } from './repo.js';
 import { executeRuntimeCleanup } from './runtime-cleanup.js';
+import { executeRuntimeConfigTest } from './runtime-config.js';
+import { executeServerSshTest } from './server-ssh.js';
 import type { ExecutorDependencies, JobExecutor } from './types.js';
 
 const EXECUTORS: Record<JobType, JobExecutor> = {
@@ -16,6 +18,8 @@ const EXECUTORS: Record<JobType, JobExecutor> = {
   'codex.fix.merge_to_production': executeCodexFixMerge,
   'observability.preflight': executeObservabilityPreflight,
   'runtime.cleanup': executeRuntimeCleanup,
+  'server.ssh.test': executeServerSshTest,
+  'runtime.config.test': executeRuntimeConfigTest,
 };
 
 export const SUPPORTED_JOB_TYPES = Object.freeze(Object.keys(EXECUTORS) as JobType[]);

@@ -12,7 +12,7 @@ test('all protocol v1 job types execute through injected adapters', async () => 
   mkdirSync(join(workspace, 'src'), { recursive: true });
   writeFileSync(join(workspace, 'package.json'), JSON.stringify({ name: 'fixture', scripts: { start: 'node src/server.js' }, dependencies: { express: 'latest' } }));
   writeFileSync(join(workspace, 'src', 'server.js'), 'console.log("fixture")\n');
-  const calls = { codex: 0, checkout: 0, commit: 0, merge: 0, install: 0, remote: 0, cleanup: 0, jenkins: 0 };
+  const calls = { codex: 0, checkout: 0, commit: 0, merge: 0, install: 0, installTimeoutMs: 0, remote: 0, cleanup: 0, sshTest: 0, configTest: 0, jenkins: 0 };
   const project = fixtureProject();
   const dependencies: ExecutorDependencies = {
     config: {
@@ -22,14 +22,16 @@ test('all protocol v1 job types execute through injected adapters', async () => 
       agentName: 'agent-m2',
       serverId: 'local-server',
       pollIntervalMs: 1,
+      leaseSeconds: 3_600,
       runOnce: true,
       codexCli: 'codex',
       serviceManager: 'pm2',
     },
     git: {
       syncWorkspace: async () => workspace,
-      installDependencies: async () => {
+      installDependencies: async (_workspacePath, timeoutMs) => {
         calls.install += 1;
+        calls.installTimeoutMs = timeoutMs;
         return { command: 'npm ci --include=dev' };
       },
       checkoutBranch: async () => { calls.checkout += 1; },
@@ -53,6 +55,14 @@ test('all protocol v1 job types execute through injected adapters', async () => 
       cleanupRuntime: async () => {
         calls.cleanup += 1;
         return { code: 0, stdout: 'cleanup_complete:fixture', stderr: '' };
+      },
+      testConnection: async () => {
+        calls.sshTest += 1;
+        return { code: 0, stdout: 'connected:runtime-1:ubuntu', stderr: '' };
+      },
+      probeRuntimeConfig: async () => {
+        calls.configTest += 1;
+        return { code: 0, stdout: 'runtime_config_probe:success:oak_postgres', stderr: '' };
       },
     },
     codex: {
@@ -87,6 +97,15 @@ test('all protocol v1 job types execute through injected adapters', async () => 
   results.set('codex.fix.merge_to_production', await executeJob(job('codex.fix.merge_to_production', { fix: { projectId: project.id, branchName: 'autodevops/fix/fixture' }, project }), dependencies));
   results.set('observability.preflight', await executeJob(job('observability.preflight', {}), dependencies));
   results.set('runtime.cleanup', await executeJob(job('runtime.cleanup', { project, targetServer: { id: 'remote-server', name: 'remote', role: 'runtime' }, cleanup: { paths: ['/opt/autodevops/apps/fixture'], stopRuntime: true, pm2AppName: 'fixture' } }), dependencies));
+  results.set('server.ssh.test', await executeJob(job('server.ssh.test', { targetServer: { id: 'runtime-1', name: 'runtime-1', role: 'runtime', sshHost: '192.168.34.25', sshUser: 'ubuntu' } }), dependencies));
+  results.set('runtime.config.test', await executeJob(job('runtime.config.test', {
+    configId: 'config-1',
+    revision: 1,
+    kind: 'oak_postgres',
+    targetPath: '/opt/autodevops/apps/fixture',
+    targetServer: { id: 'runtime-1', name: 'runtime-1', role: 'runtime', sshHost: '192.168.34.25', sshUser: 'ubuntu' },
+    runtimeConfig: { host: 'db.internal', user: 'fixture', password: 'transient-only', database: 'fixture' },
+  }), dependencies));
 
   assert.deepEqual([...results.keys()].sort(), [...SUPPORTED_JOB_TYPES].sort());
   assert.ok(results.get('repo.inspect')?.contract);
@@ -98,10 +117,15 @@ test('all protocol v1 job types execute through injected adapters', async () => 
   assert.equal(results.get('codex.fix.merge_to_production')?.mergeCommitSha, 'def456abc123');
   assert.equal(results.get('observability.preflight')?.status, 'success');
   assert.equal(results.get('runtime.cleanup')?.status, 'success');
+  assert.equal(results.get('server.ssh.test')?.status, 'success');
+  assert.equal(results.get('runtime.config.test')?.status, 'success');
   assert.equal(calls.codex, 3);
   assert.equal(calls.remote, 1);
   assert.equal(calls.cleanup, 1);
+  assert.equal(calls.sshTest, 1);
+  assert.equal(calls.configTest, 1);
   assert.equal(calls.install, 1);
+  assert.equal(calls.installTimeoutMs, 60 * 60 * 1_000);
   assert.equal(calls.jenkins, 1);
   assert.equal(calls.checkout, 1);
   assert.equal(calls.commit, 1);
@@ -123,6 +147,7 @@ test('packaged CLI emits safe PM2 config and diagnostics', () => {
   const parsed = JSON.parse(pm2) as { apps: Array<{ name: string; env: Record<string, string> }> };
   assert.equal(parsed.apps[0]?.name, 'autodevops-agent-agent-cli-test');
   assert.equal(parsed.apps[0]?.env.AUTODEVOPS_API_URL, 'https://control.example.test');
+  assert.equal(parsed.apps[0]?.env.AUTODEVOPS_AGENT_LEASE_SECONDS, '3600');
 
   const diagnostics = execFileSync(process.execPath, ['apps/agent/dist/cli.js', 'diagnose'], { encoding: 'utf8', env });
   const report = JSON.parse(diagnostics) as { version: { protocolVersion: number }; readiness: { status: string } };
