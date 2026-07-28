@@ -12,7 +12,7 @@ test('all protocol v1 job types execute through injected adapters', async () => 
   mkdirSync(join(workspace, 'src'), { recursive: true });
   writeFileSync(join(workspace, 'package.json'), JSON.stringify({ name: 'fixture', scripts: { start: 'node src/server.js' }, dependencies: { express: 'latest' } }));
   writeFileSync(join(workspace, 'src', 'server.js'), 'console.log("fixture")\n');
-  const calls = { codex: 0, checkout: 0, commit: 0, merge: 0, install: 0, installTimeoutMs: 0, remote: 0, cleanup: 0, sshTest: 0, jenkins: 0 };
+  const calls = { codex: 0, checkout: 0, commit: 0, merge: 0, install: 0, installTimeoutMs: 0, remote: 0, cleanup: 0, sshTest: 0, configTest: 0, jenkins: 0 };
   const project = fixtureProject();
   const dependencies: ExecutorDependencies = {
     config: {
@@ -60,6 +60,10 @@ test('all protocol v1 job types execute through injected adapters', async () => 
         calls.sshTest += 1;
         return { code: 0, stdout: 'connected:runtime-1:ubuntu', stderr: '' };
       },
+      probeRuntimeConfig: async () => {
+        calls.configTest += 1;
+        return { code: 0, stdout: 'runtime_config_probe:success:oak_postgres', stderr: '' };
+      },
     },
     codex: {
       run: async () => {
@@ -94,6 +98,14 @@ test('all protocol v1 job types execute through injected adapters', async () => 
   results.set('observability.preflight', await executeJob(job('observability.preflight', {}), dependencies));
   results.set('runtime.cleanup', await executeJob(job('runtime.cleanup', { project, targetServer: { id: 'remote-server', name: 'remote', role: 'runtime' }, cleanup: { paths: ['/opt/autodevops/apps/fixture'], stopRuntime: true, pm2AppName: 'fixture' } }), dependencies));
   results.set('server.ssh.test', await executeJob(job('server.ssh.test', { targetServer: { id: 'runtime-1', name: 'runtime-1', role: 'runtime', sshHost: '192.168.34.25', sshUser: 'ubuntu' } }), dependencies));
+  results.set('runtime.config.test', await executeJob(job('runtime.config.test', {
+    configId: 'config-1',
+    revision: 1,
+    kind: 'oak_postgres',
+    targetPath: '/opt/autodevops/apps/fixture',
+    targetServer: { id: 'runtime-1', name: 'runtime-1', role: 'runtime', sshHost: '192.168.34.25', sshUser: 'ubuntu' },
+    runtimeConfig: { host: 'db.internal', user: 'fixture', password: 'transient-only', database: 'fixture' },
+  }), dependencies));
 
   assert.deepEqual([...results.keys()].sort(), [...SUPPORTED_JOB_TYPES].sort());
   assert.ok(results.get('repo.inspect')?.contract);
@@ -106,10 +118,12 @@ test('all protocol v1 job types execute through injected adapters', async () => 
   assert.equal(results.get('observability.preflight')?.status, 'success');
   assert.equal(results.get('runtime.cleanup')?.status, 'success');
   assert.equal(results.get('server.ssh.test')?.status, 'success');
+  assert.equal(results.get('runtime.config.test')?.status, 'success');
   assert.equal(calls.codex, 3);
   assert.equal(calls.remote, 1);
   assert.equal(calls.cleanup, 1);
   assert.equal(calls.sshTest, 1);
+  assert.equal(calls.configTest, 1);
   assert.equal(calls.install, 1);
   assert.equal(calls.installTimeoutMs, 60 * 60 * 1_000);
   assert.equal(calls.jenkins, 1);

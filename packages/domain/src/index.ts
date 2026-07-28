@@ -12,7 +12,7 @@ export type CodexFixStatus = 'draft' | 'pending_review' | 'approved' | 'pipeline
 export type ServerRole = 'platform' | 'build' | 'runtime' | 'observability';
 export type AgentStatus = 'online' | 'offline' | 'degraded' | 'disabled';
 export type JobStatus = 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled';
-export type JobType = 'repo.inspect' | 'repo.sync' | 'repo.install' | 'jenkins.pipeline.run' | 'codex.incident.analyze' | 'codex.fix.create_patch' | 'codex.fix.merge_to_production' | 'observability.preflight' | 'runtime.cleanup' | 'server.ssh.test';
+export type JobType = 'repo.inspect' | 'repo.sync' | 'repo.install' | 'jenkins.pipeline.run' | 'codex.incident.analyze' | 'codex.fix.create_patch' | 'codex.fix.merge_to_production' | 'observability.preflight' | 'runtime.cleanup' | 'server.ssh.test' | 'runtime.config.test';
 export interface Project {
     id: string;
     name: string;
@@ -322,6 +322,20 @@ export interface ClaimedJob {
     leaseToken: string;
     leaseExpiresAt: string;
 }
+export type ManagedRuntimeConfigKind = 'oak_postgres' | 'oak_mysql' | 'oak_redis';
+export interface ManagedRuntimeConfigRequirement {
+    kind: ManagedRuntimeConfigKind;
+    adapterVersion: 1;
+    templatePath?: string;
+    targetPath: string;
+    requiredAt: 'runtime' | 'build_and_runtime';
+    required: boolean;
+    evidence: string[];
+    templateKeys: string[];
+    existingRuntimeFile: boolean;
+    trackedRuntimeFile: boolean;
+    gitIgnored: boolean;
+}
 export interface OakDetection {
     detected: boolean;
     dependencies: string[];
@@ -329,6 +343,7 @@ export interface OakDetection {
     scripts: Record<string, string>;
     evidence: string[];
     databaseConfigFiles: string[];
+    runtimeConfigRequirements?: ManagedRuntimeConfigRequirement[];
     initializationScript?: string;
 }
 export interface RepoInspection {
@@ -430,6 +445,10 @@ export interface RuntimeContract {
         notes: string[];
         connectionSource?: 'oak_configuration' | 'environment' | 'unknown';
         configurationFiles?: string[];
+    };
+    runtimeConfig?: {
+        requirements: ManagedRuntimeConfigRequirement[];
+        notes: string[];
     };
     environmentConfig: {
         envFileName: string;

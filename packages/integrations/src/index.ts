@@ -43,10 +43,11 @@ export class JenkinsClient {
   }
 
   async triggerBuild(jobName: string, params: Record<string, string | number | boolean>): Promise<{ queueUrl: string }> {
-    const search = new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)]));
-    const response = await fetch(`${this.options.baseUrl}/job/${encodeURIComponent(jobName)}/buildWithParameters?${search}`, {
+    const body = new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)]));
+    const response = await fetch(`${this.options.baseUrl}/job/${encodeURIComponent(jobName)}/buildWithParameters`, {
       method: 'POST',
-      headers: await this.requestHeaders('token'),
+      headers: { ...(await this.requestHeaders('token')), 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
     });
     if (!response.ok) {
       throw new Error(`Jenkins trigger failed: ${response.status} ${await response.text()}`);

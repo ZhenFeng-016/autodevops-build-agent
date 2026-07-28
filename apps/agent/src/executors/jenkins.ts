@@ -25,6 +25,8 @@ export async function executeJenkinsRun(job: Job, dependencies: ExecutorDependen
       PRODUCTION_SSH: stringValue(job.params.productionSsh),
       MIGRATION_APPROVAL_TOKEN: stringValue(job.params.migrationApprovalToken),
       DATA_INIT_APPROVAL_TOKEN: stringValue(job.params.dataInitApprovalToken),
+      RUNTIME_CONFIG_LEASE_ID: stringValue(job.params.runtimeConfigLeaseId),
+      RUNTIME_CONFIG_TOKEN: stringValue(job.params.runtimeConfigToken),
     },
   });
   if (!result.configured) {
