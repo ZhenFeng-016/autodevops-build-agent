@@ -1,5 +1,12 @@
 # @zhenfengxx/build-agent
 
+## 1.3.0
+
+### Minor Changes
+
+- a3f84dd: Add BuildAgent-to-runtime SSH association tests with a dedicated target-host key separate from repository Git credentials.
+- a3f84dd: Detect platform-managed Oak PostgreSQL, MySQL, and Redis runtime configuration requirements, advertise runtime-config capabilities, and submit Jenkins parameters in the POST body so sensitive values do not enter URLs.
+
 ## 1.2.1
 
 ### Patch Changes

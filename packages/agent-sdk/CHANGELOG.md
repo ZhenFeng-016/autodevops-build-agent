@@ -1,5 +1,13 @@
 # @zhenfengxx/agent-sdk
 
+## 1.3.0
+
+### Patch Changes
+
+- Updated dependencies [a3f84dd]
+- Updated dependencies [a3f84dd]
+  - @zhenfengxx/contracts@1.3.0
+
 ## 1.2.1
 
 ### Patch Changes
