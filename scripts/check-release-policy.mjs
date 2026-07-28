@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 
 const publishWorkflow = readFileSync('.github/workflows/publish-npm-packages.yml', 'utf8');
 const promoteWorkflow = readFileSync('.github/workflows/promote-npm-latest.yml', 'utf8');
@@ -77,6 +77,32 @@ if (changesetConfig.baseBranch !== 'main' || changesetConfig.access !== 'public'
 const fixed = changesetConfig.fixed.find((group) => publicPackages.every((name) => group.includes(name)));
 if (!fixed || fixed.length !== publicPackages.length) {
   throw new Error('all four public packages must remain in one fixed release group');
+}
+
+const ignoredPackages = new Set(changesetConfig.ignore ?? []);
+const changesetFiles = readdirSync('.changeset')
+  .filter((file) => file.endsWith('.md') && file !== 'README.md');
+
+for (const file of changesetFiles) {
+  const content = readFileSync(`.changeset/${file}`, 'utf8');
+  const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!frontmatter) {
+    throw new Error(`changeset ${file} is missing valid frontmatter`);
+  }
+
+  const packages = frontmatter[1]
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s*(?:"([^"]+)"|'([^']+)'|([^:\s]+))\s*:\s*(?:major|minor|patch)\s*$/))
+    .filter(Boolean)
+    .map((match) => match[1] ?? match[2] ?? match[3]);
+  const ignored = packages.filter((name) => ignoredPackages.has(name));
+  const publishable = packages.filter((name) => !ignoredPackages.has(name));
+
+  if (ignored.length > 0 && publishable.length > 0) {
+    throw new Error(
+      `changeset ${file} mixes ignored packages (${ignored.join(', ')}) with publishable packages (${publishable.join(', ')})`,
+    );
+  }
 }
 
 console.log('Release policy check passed: OIDC publish, token-scoped latest promotion, guarded version PR, fixed public package group');
