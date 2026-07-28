@@ -53,6 +53,7 @@ export async function withTransientGitRetry<T>(operation: (attempt: number) => P
     try {
       return await operation(attempt);
     } catch (error) {
+      if (error && typeof error === 'object' && (error as { timedOut?: unknown }).timedOut === true) throw error;
       if (attempt >= maxAttempts || !isTransientGitFailure(error)) throw error;
       const delayMs = delaysMs[Math.min(attempt - 1, delaysMs.length - 1)] ?? 0;
       options.onRetry?.({

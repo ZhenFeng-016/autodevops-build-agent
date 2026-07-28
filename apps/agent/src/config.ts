@@ -12,11 +12,13 @@ export type AgentConfig = {
   agentName: string;
   serverId?: string;
   pollIntervalMs: number;
+  leaseSeconds: number;
   runOnce: boolean;
   authSecret?: string;
   authToken?: string;
   codexCli: string;
   gitSshKeyPath?: string;
+  targetSshKeyPath?: string;
   serviceManager: string;
 };
 
@@ -29,11 +31,13 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env): AgentConf
     agentName: env.AUTODEVOPS_AGENT_NAME || hostname(),
     serverId: env.AUTODEVOPS_AGENT_SERVER_ID,
     pollIntervalMs: Number(env.AUTODEVOPS_AGENT_POLL_INTERVAL_MS ?? '10000'),
+    leaseSeconds: boundedInteger(env.AUTODEVOPS_AGENT_LEASE_SECONDS, 3_600, 30, 3_600),
     runOnce: truthy(env.AUTODEVOPS_AGENT_RUN_ONCE),
     authSecret: env.AUTODEVOPS_AGENT_AUTH_SECRET,
     authToken: env.AUTODEVOPS_AGENT_AUTH_TOKEN,
     codexCli: env.CODEX_CLI || 'codex',
     gitSshKeyPath: env.AUTODEVOPS_GIT_SSH_KEY_PATH,
+    targetSshKeyPath: env.AUTODEVOPS_TARGET_SSH_KEY_PATH,
     serviceManager: env.AUTODEVOPS_AGENT_SERVICE_MANAGER ?? 'pm2',
   };
   configureGitSshCommand(config.gitSshKeyPath);
@@ -57,11 +61,18 @@ export function generatePm2Config(config: AgentConfig, executable = process.argv
           AUTODEVOPS_AGENT_ID: config.agentId,
           AUTODEVOPS_AGENT_NAME: config.agentName,
           AUTODEVOPS_AGENT_WORKSPACE_ROOT: config.workspaceRoot,
+          AUTODEVOPS_AGENT_LEASE_SECONDS: String(config.leaseSeconds),
           ...(config.serverId ? { AUTODEVOPS_AGENT_SERVER_ID: config.serverId } : {}),
         },
       },
     ],
   };
+}
+
+function boundedInteger(value: string | undefined, fallback: number, minimum: number, maximum: number) {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isInteger(parsed)) return fallback;
+  return Math.min(maximum, Math.max(minimum, parsed));
 }
 
 function loadPersistentAgentId(workspaceRoot: string) {

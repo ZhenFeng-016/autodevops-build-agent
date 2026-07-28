@@ -58,6 +58,10 @@ test('protocol v1 validates typed job parameters at runtime', () => {
   });
   assert.equal(parsed.type, 'repo.inspect');
   assert.throws(() => JobParamsEnvelopeSchema.parse({ type: 'repo.sync', params: {} }));
+  assert.equal(JobParamsEnvelopeSchema.parse({
+    type: 'server.ssh.test',
+    params: { targetServer: { id: 'runtime-1', name: 'runtime-1' }, timeoutMs: 30_000 },
+  }).type, 'server.ssh.test');
 });
 
 test('Agent SDK executes the authenticated register, heartbeat, claim, lease, event, complete and fail contract', async () => {

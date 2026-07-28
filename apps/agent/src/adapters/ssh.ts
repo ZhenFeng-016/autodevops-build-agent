@@ -7,6 +7,7 @@ import type { AgentConfig } from '../config.js';
 export interface RemoteAdapter {
   syncProject(project: Project, server: TargetServer, gitRef: string, install: boolean, timeoutMs: number): Promise<CommandResult & { targetPath: string }>;
   cleanupRuntime(project: Project, server: TargetServer, cleanup: RuntimeCleanupSpec, timeoutMs: number): Promise<CommandResult>;
+  testConnection(server: TargetServer, timeoutMs: number): Promise<CommandResult>;
   targetPath(project: Project, server: TargetServer): string;
   isLocal(server: TargetServer): boolean;
 }
@@ -25,6 +26,10 @@ export type RuntimeCleanupAlias = {
   target: string;
 };
 
+const REMOTE_TIMEOUT_KILL_AFTER_SECONDS = 15;
+const TRANSPORT_TIMEOUT_GRACE_MS = 20_000;
+const TRANSPORT_FORCE_KILL_MS = 5_000;
+
 export class SshRemoteAdapter implements RemoteAdapter {
   constructor(private readonly config: AgentConfig) {}
 
@@ -36,6 +41,10 @@ export class SshRemoteAdapter implements RemoteAdapter {
 
   async cleanupRuntime(project: Project, server: TargetServer, cleanup: RuntimeCleanupSpec, timeoutMs: number) {
     return this.run(server, runtimeCleanupScript(project.id, cleanup), timeoutMs);
+  }
+
+  async testConnection(server: TargetServer, timeoutMs: number) {
+    return this.run(server, 'set -euo pipefail\nprintf "connected:%s:%s\\n" "$(hostname)" "$(id -un)"', timeoutMs);
   }
 
   targetPath(project: Project, server: TargetServer) {
@@ -51,20 +60,24 @@ export class SshRemoteAdapter implements RemoteAdapter {
   }
 
   private run(server: TargetServer, script: string, timeoutMs: number) {
-    const args = sshArgsForServer(server, this.config.gitSshKeyPath);
+    const args = sshArgsForServer(server, this.config.targetSshKeyPath ?? this.config.gitSshKeyPath);
     return new Promise<CommandResult>((resolvePromise) => {
-      const child = spawn('ssh', [...args, 'bash', '-s'], { stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn('ssh', [...args, ...remoteCommandArgs(timeoutMs)], { stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
+      let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
       const timer = setTimeout(() => {
-        stderr += `\nRemote command timed out after ${timeoutMs}ms.`;
+        stderr += `\nRemote command transport did not exit after ${timeoutMs}ms plus ${TRANSPORT_TIMEOUT_GRACE_MS}ms grace.`;
         child.kill('SIGTERM');
-      }, timeoutMs);
+        forceKillTimer = setTimeout(() => child.kill('SIGKILL'), TRANSPORT_FORCE_KILL_MS);
+      }, timeoutMs + TRANSPORT_TIMEOUT_GRACE_MS);
       child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
       child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
       child.on('error', (error) => { stderr += `\n${error.message}`; });
       child.on('close', (code) => {
         clearTimeout(timer);
+        if (forceKillTimer) clearTimeout(forceKillTimer);
+        if (code === 124) stderr += `\nRemote command timed out after ${timeoutMs}ms.`;
         resolvePromise({ stdout, stderr, code });
       });
       child.stdin.end(script);
@@ -72,14 +85,29 @@ export class SshRemoteAdapter implements RemoteAdapter {
   }
 }
 
-function sshArgsForServer(server: TargetServer, gitSshKeyPath?: string) {
-  if (server.sshAuthType === 'system_default' && server.sshTarget) return splitShellWords(server.sshTarget.replace(/^ssh\s+/, ''));
+export function remoteCommandArgs(timeoutMs: number) {
+  const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1_000));
+  return [
+    'timeout',
+    '--signal=TERM',
+    `--kill-after=${REMOTE_TIMEOUT_KILL_AFTER_SECONDS}s`,
+    `${timeoutSeconds}s`,
+    'bash',
+    '-s',
+  ];
+}
+
+export function sshArgsForServer(server: TargetServer, targetSshKeyPath?: string) {
+  const options = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=15'];
+  if (targetSshKeyPath) options.push('-i', targetSshKeyPath, '-o', 'IdentitiesOnly=yes');
+  if (server.sshAuthType === 'system_default' && server.sshTarget) {
+    return [...options, ...splitShellWords(server.sshTarget.replace(/^ssh\s+/, ''))];
+  }
   const platformForwarded = isLoopbackHost(server.sshHost) && server.host && !isLoopbackHost(server.host);
   const host = platformForwarded ? server.host : server.sshHost || server.host;
   const user = server.sshUser;
   if (!host || !user) throw new Error(`Server ${server.name} is missing sshHost/host or sshUser`);
-  const args = ['-p', String(platformForwarded ? 22 : server.sshPort ?? 22), '-o', 'StrictHostKeyChecking=accept-new'];
-  if (gitSshKeyPath) args.push('-i', gitSshKeyPath, '-o', 'IdentitiesOnly=yes');
+  const args = [...options, '-p', String(platformForwarded ? 22 : server.sshPort ?? 22)];
   args.push(`${user}@${host}`);
   return args;
 }
@@ -159,6 +187,14 @@ export function repoInstallScript(targetPath: string) {
   return [
     `cd ${shellQuote(targetPath)}`,
     'export NODE_ENV=development npm_config_omit=',
+    'is_oak_git_cli_project() {',
+    "  node -e 'const p=require(\"./package.json\"); const oak=p.oak && typeof p.oak===\"object\"; const cli=p.devDependencies?.[\"@xuchangzju/oak-cli\"]; process.exit(oak && typeof cli===\"string\" && /^(git\\+ssh|git\\+https|ssh:|git@)/i.test(cli) ? 0 : 1)'",
+    '}',
+    'npm_oak_isolated_install() {',
+    '  echo "Oak Git dependency layout detected; isolating dependency lifecycle scripts."',
+    '  run_with_git_retry "$@" --legacy-peer-deps --ignore-scripts',
+    '  npm run postinstall --if-present',
+    '}',
     'npm_with_peer_fallback() {',
     '  local npm_log npm_code',
     '  npm_log="$(mktemp)"',
@@ -180,9 +216,9 @@ export function repoInstallScript(targetPath: string) {
     '  return "$npm_code"',
     '}',
     'if [ -f pnpm-lock.yaml ] && command -v pnpm >/dev/null 2>&1; then run_with_git_retry pnpm install --frozen-lockfile --prod=false;',
-    'elif [ -f package-lock.json ] && git ls-files --error-unmatch -- package-lock.json >/dev/null 2>&1; then npm_with_peer_fallback npm ci --include=dev;',
+    'elif [ -f package-lock.json ] && git ls-files --error-unmatch -- package-lock.json >/dev/null 2>&1; then if is_oak_git_cli_project; then npm_oak_isolated_install npm ci --include=dev; else npm_with_peer_fallback npm ci --include=dev; fi;',
     'elif [ -f yarn.lock ] && command -v yarn >/dev/null 2>&1; then run_with_git_retry yarn install --frozen-lockfile --production=false;',
-    'elif [ -f package.json ]; then rm -f package-lock.json; npm_with_peer_fallback npm install --include=dev --package-lock=false;',
+    'elif [ -f package.json ]; then rm -f package-lock.json; if is_oak_git_cli_project; then npm_oak_isolated_install npm install --include=dev --package-lock=false; else npm_with_peer_fallback npm install --include=dev --package-lock=false; fi;',
     'else echo "No package.json found; dependency install skipped."; fi',
   ].join('\n');
 }

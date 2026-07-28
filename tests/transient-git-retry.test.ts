@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { repoInstallScript, repoSyncScript } from '../apps/agent/src/adapters/ssh.js';
+import { shouldIsolateOakDependencyScripts } from '../apps/agent/src/adapters/git.js';
+import { remoteCommandArgs, repoInstallScript, repoSyncScript } from '../apps/agent/src/adapters/ssh.js';
 import { isTransientGitFailure, withTransientGitRetry } from '../apps/agent/src/transient-git-retry.js';
 
 test('transient Git transport failures retry with bounded backoff', async () => {
@@ -33,6 +34,18 @@ test('permanent Git authentication failures are not retried', async () => {
   assert.equal(isTransientGitFailure('fetch-pack: unexpected disconnect while reading sideband packet'), true);
 });
 
+test('command timeouts are not retried as transient Git failures', async () => {
+  let attempts = 0;
+  await assert.rejects(() => withTransientGitRetry(async () => {
+    attempts += 1;
+    throw Object.assign(new Error('connection timed out'), { timedOut: true });
+  }, {
+    sleepFn: async () => undefined,
+  }), /connection timed out/);
+
+  assert.equal(attempts, 1);
+});
+
 test('remote repository delivery retries sync and package-manager Git transport failures', () => {
   const syncScript = repoSyncScript('git@gitea.example.test:Oak-Team/oak-domain.git', 'dev', '/opt/autodevops/workspaces/project');
   const installScript = repoInstallScript('/opt/autodevops/workspaces/project');
@@ -42,4 +55,31 @@ test('remote repository delivery retries sync and package-manager Git transport 
   assert.match(installScript, /run_with_git_retry pnpm install/);
   assert.match(installScript, /run_with_git_retry yarn install/);
   assert.match(installScript, /run_with_git_retry "\$@"/);
+  assert.match(installScript, /--legacy-peer-deps --ignore-scripts/);
+  assert.match(installScript, /npm run postinstall --if-present/);
+});
+
+test('Oak applications with a Git-installed CLI isolate dependency lifecycle scripts', () => {
+  assert.equal(shouldIsolateOakDependencyScripts({
+    oak: { package: true },
+    devDependencies: { '@xuchangzju/oak-cli': 'git+ssh://git@gitea.example.test/Oak-Team/oak-cli.git#dev' },
+  }), true);
+  assert.equal(shouldIsolateOakDependencyScripts({
+    oak: { package: true },
+    devDependencies: { '@xuchangzju/oak-cli': 'file:../oak-cli' },
+  }), false);
+  assert.equal(shouldIsolateOakDependencyScripts({
+    devDependencies: { '@xuchangzju/oak-cli': 'git+ssh://git@gitea.example.test/Oak-Team/oak-cli.git#dev' },
+  }), false);
+});
+
+test('remote commands enforce the requested timeout on the target host process group', () => {
+  assert.deepEqual(remoteCommandArgs(60 * 60 * 1_000), [
+    'timeout',
+    '--signal=TERM',
+    '--kill-after=15s',
+    '3600s',
+    'bash',
+    '-s',
+  ]);
 });

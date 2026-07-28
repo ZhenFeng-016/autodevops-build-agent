@@ -22,7 +22,7 @@ export class ControlPlaneClient {
     return this.client.heartbeat(body);
   }
 
-  claimJob(leaseSeconds = 900) {
+  claimJob(leaseSeconds = this.config.leaseSeconds) {
     return this.client.claimJob({ protocolVersion: PROTOCOL_VERSION, capabilities: [...AGENT_CAPABILITIES], leaseSeconds });
   }
 

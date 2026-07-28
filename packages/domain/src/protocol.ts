@@ -87,6 +87,7 @@ export const JobTypeSchema = z.enum([
   'codex.fix.merge_to_production',
   'observability.preflight',
   'runtime.cleanup',
+  'server.ssh.test',
 ]);
 
 const ProjectJobParamsSchema = z.object({
@@ -105,6 +106,7 @@ export const JobParamsEnvelopeSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('codex.fix.merge_to_production'), params: z.object({ fix: z.record(z.string(), z.unknown()) }).passthrough() }),
   z.object({ type: z.literal('observability.preflight'), params: z.record(z.string(), z.unknown()) }),
   z.object({ type: z.literal('runtime.cleanup'), params: ProjectJobParamsSchema.extend({ targetServer: z.record(z.string(), z.unknown()), cleanup: z.record(z.string(), z.unknown()) }) }),
+  z.object({ type: z.literal('server.ssh.test'), params: z.object({ targetServer: z.record(z.string(), z.unknown()), timeoutMs: z.number().int().positive().optional() }).passthrough() }),
 ]);
 export type JobParamsEnvelope = z.infer<typeof JobParamsEnvelopeSchema>;
 
