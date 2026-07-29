@@ -1,7 +1,10 @@
 import { z } from 'zod';
 
-export const PROTOCOL_VERSION = 1 as const;
+export const PROTOCOL_VERSION = 2 as const;
 export const MIN_SUPPORTED_PROTOCOL_VERSION = 1 as const;
+export const SUPPORTED_PROTOCOL_VERSIONS = [1, 2] as const;
+
+const ProtocolVersionSchema = z.union([z.literal(1), z.literal(2)]);
 
 export const AgentCapabilityValues = [
   'repo.inspect',
@@ -15,6 +18,7 @@ export const AgentCapabilityValues = [
   'runtime.cleanup',
   'runtime-config-lease-v1',
   'runtime-config-probe-v1',
+  'job-control-v2',
 ] as const;
 
 export const AgentCapabilitySchema = z.enum(AgentCapabilityValues);
@@ -35,8 +39,8 @@ export const AgentReadinessSchema = z.object({
 const VersionIdentitySchema = z.object({
   agentVersion: z.string().min(1),
   buildRevision: z.string().min(7),
-  protocolVersion: z.literal(PROTOCOL_VERSION),
-  supportedProtocolVersions: z.array(z.number().int().positive()).min(1),
+  protocolVersion: ProtocolVersionSchema,
+  supportedProtocolVersions: z.array(ProtocolVersionSchema).min(1),
 });
 
 export const AgentRegistrationRequestSchema = VersionIdentitySchema.extend({
@@ -65,7 +69,7 @@ export const AgentHeartbeatRequestSchema = VersionIdentitySchema.extend({
 export type AgentHeartbeatRequest = z.infer<typeof AgentHeartbeatRequestSchema>;
 
 export const ProtocolNegotiationSchema = z.object({
-  protocolVersion: z.literal(PROTOCOL_VERSION),
+  protocolVersion: ProtocolVersionSchema,
   minimumSupportedProtocolVersion: z.literal(MIN_SUPPORTED_PROTOCOL_VERSION),
   compatible: z.boolean(),
   capabilities: z.array(AgentCapabilitySchema),
@@ -73,11 +77,37 @@ export const ProtocolNegotiationSchema = z.object({
 export type ProtocolNegotiation = z.infer<typeof ProtocolNegotiationSchema>;
 
 export const AgentClaimRequestSchema = z.object({
-  protocolVersion: z.literal(PROTOCOL_VERSION),
+  protocolVersion: ProtocolVersionSchema,
   leaseSeconds: z.number().int().min(30).max(3600).optional(),
   capabilities: z.array(AgentCapabilitySchema).optional(),
 });
 export type AgentClaimRequest = z.infer<typeof AgentClaimRequestSchema>;
+
+export const JobExecutionControlRequestSchema = z.object({
+  protocolVersion: z.literal(PROTOCOL_VERSION),
+  agentId: z.string().min(1),
+  attemptId: z.string().min(1),
+  leaseToken: z.string().min(1),
+  leaseSeconds: z.number().int().min(30).max(3600),
+});
+export type JobExecutionControlRequest = z.infer<typeof JobExecutionControlRequestSchema>;
+
+export const JobExecutionControlResponseSchema = z.object({
+  action: z.enum(['continue', 'cancel']),
+  jobStatus: z.string().min(1),
+  leaseExpiresAt: z.string().datetime().optional(),
+  reason: z.string().optional(),
+});
+export type JobExecutionControlResponse = z.infer<typeof JobExecutionControlResponseSchema>;
+
+export const JobCancellationAckRequestSchema = z.object({
+  protocolVersion: z.literal(PROTOCOL_VERSION),
+  agentId: z.string().min(1),
+  attemptId: z.string().min(1),
+  leaseToken: z.string().min(1),
+  message: z.string().min(1).max(2000).optional(),
+});
+export type JobCancellationAckRequest = z.infer<typeof JobCancellationAckRequestSchema>;
 
 export const JobTypeSchema = z.enum([
   'repo.inspect',
@@ -163,9 +193,12 @@ export const AgentApiErrorSchema = z.object({
 export type AgentApiError = z.infer<typeof AgentApiErrorSchema>;
 
 export function negotiateProtocol(input: { protocolVersion: number; supportedProtocolVersions: number[]; capabilities: readonly string[] }): ProtocolNegotiation {
-  const compatible = input.protocolVersion === PROTOCOL_VERSION && input.supportedProtocolVersions.includes(PROTOCOL_VERSION);
+  const negotiatedVersion = [...SUPPORTED_PROTOCOL_VERSIONS]
+    .reverse()
+    .find((version) => input.supportedProtocolVersions.includes(version));
+  const compatible = ProtocolVersionSchema.safeParse(input.protocolVersion).success && negotiatedVersion !== undefined;
   return ProtocolNegotiationSchema.parse({
-    protocolVersion: PROTOCOL_VERSION,
+    protocolVersion: negotiatedVersion ?? MIN_SUPPORTED_PROTOCOL_VERSION,
     minimumSupportedProtocolVersion: MIN_SUPPORTED_PROTOCOL_VERSION,
     compatible,
     capabilities: input.capabilities.filter((capability): capability is AgentCapability => AgentCapabilitySchema.safeParse(capability).success),

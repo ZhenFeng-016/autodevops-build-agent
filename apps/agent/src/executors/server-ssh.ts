@@ -1,12 +1,12 @@
 import type { Job } from '@zhenfengxx/contracts';
 import type { TargetServer } from '../common.js';
-import type { ExecutorDependencies } from './types.js';
+import type { ExecutorDependencies, JobExecutionContext } from './types.js';
 
-export async function executeServerSshTest(job: Job, dependencies: ExecutorDependencies) {
+export async function executeServerSshTest(job: Job, dependencies: ExecutorDependencies, context: JobExecutionContext) {
   const targetServer = job.params.targetServer as TargetServer | undefined;
   if (!targetServer?.id || !targetServer.name) throw new Error('server.ssh.test requires targetServer');
   const timeoutMs = Number(job.params.timeoutMs ?? 30_000);
-  const result = await dependencies.remote.testConnection(targetServer, timeoutMs);
+  const result = await dependencies.remote.testConnection(targetServer, timeoutMs, context.signal);
   if (result.code !== 0) {
     const detail = (result.stderr || result.stdout || `ssh exited ${result.code}`).trim();
     throw new Error(`SSH from BuildAgent to ${targetServer.name} failed: ${detail}`);

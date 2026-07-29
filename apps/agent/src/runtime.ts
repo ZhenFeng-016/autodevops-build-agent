@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { hostname } from 'node:os';
 import type { ClaimedJob } from '@zhenfengxx/contracts';
-import { errorMessage, sleep } from './common.js';
+import { errorMessage, isJobExecutionCancelled, JobExecutionCancelledError, sleep } from './common.js';
 import { AGENT_CAPABILITIES, ControlPlaneClient } from './api-client.js';
 import { SystemCodexAdapter } from './adapters/codex.js';
 import { SystemGitAdapter } from './adapters/git.js';
@@ -90,7 +90,9 @@ export class AgentRuntime {
   }
 
   async executeClaim(claim: ClaimedJob) {
-    const { job, attempt } = claim;
+    const { job, attempt, leaseToken } = claim;
+    const execution = new AbortController();
+    const monitor = this.monitorExecution(claim, execution);
     this.logger(`claimed ${job.id} ${job.type}`);
     try {
       await this.client.event(job.id, {
@@ -100,7 +102,8 @@ export class AgentRuntime {
         status: 'running',
         message: `Agent ${this.config.agentId} started ${job.type}`,
       });
-      const resultSummary = await executeJob(job, this.executors);
+      const resultSummary = await executeJob(job, this.executors, { signal: execution.signal });
+      if (execution.signal.aborted) throw new JobExecutionCancelledError(cancellationReason(execution.signal));
       await this.client.complete(job.id, {
         agentId: this.config.agentId,
         attemptId: attempt.id,
@@ -110,14 +113,64 @@ export class AgentRuntime {
       this.logger(`completed ${job.id}`);
     } catch (error) {
       const message = errorMessage(error);
+      if (isJobExecutionCancelled(error) || execution.signal.aborted) {
+        await this.client.acknowledgeJobCancellation(job.id, attempt.id, leaseToken, message)
+          .catch((ackError) => this.logger(`failed to acknowledge job cancellation: ${errorMessage(ackError)}`));
+        this.logger(`cancelled ${job.id}: ${message}`);
+        return;
+      }
       await this.client.fail(job.id, {
         agentId: this.config.agentId,
         attemptId: attempt.id,
         errorSummary: message,
       }).catch((failError) => this.logger(`failed to report job failure: ${errorMessage(failError)}`));
       this.logger(`failed ${job.id}: ${message}`);
+    } finally {
+      monitor.stop();
+      await monitor.done;
     }
   }
+
+  private monitorExecution(claim: ClaimedJob, execution: AbortController) {
+    const stopped = new AbortController();
+    let leaseExpiresAt = Date.parse(claim.leaseExpiresAt);
+    const done = (async () => {
+      while (!stopped.signal.aborted && !execution.signal.aborted) {
+        try {
+          await sleep(this.config.executionControlIntervalMs, stopped.signal);
+        } catch {
+          return;
+        }
+        try {
+          const control = await this.client.controlJobExecution(claim.job.id, claim.attempt.id, claim.leaseToken);
+          if (control.action === 'cancel') {
+            execution.abort(control.reason ?? `Job entered ${control.jobStatus}`);
+            return;
+          }
+          if (control.leaseExpiresAt) leaseExpiresAt = Date.parse(control.leaseExpiresAt);
+        } catch (error) {
+          const message = errorMessage(error);
+          if (/failed \(404\)/.test(message)) {
+            this.logger('execution control endpoint is unavailable; continuing in protocol v1 compatibility mode');
+            return;
+          }
+          this.logger(`execution control check failed: ${message}`);
+          if (!Number.isFinite(leaseExpiresAt) || Date.now() >= leaseExpiresAt) {
+            execution.abort('Execution lease expired while the control plane was unreachable');
+            return;
+          }
+        }
+      }
+    })();
+    return {
+      done,
+      stop: () => stopped.abort(),
+    };
+  }
+}
+
+function cancellationReason(signal: AbortSignal) {
+  return typeof signal.reason === 'string' ? signal.reason : 'Job execution was cancelled';
 }
 
 export function createSystemRuntime(config: AgentConfig) {

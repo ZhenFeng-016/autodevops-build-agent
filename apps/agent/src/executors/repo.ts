@@ -2,17 +2,17 @@ import { resolve } from 'node:path';
 import { buildCommandInferencePrompt, codexExecutionFailureResult, parseCodexJsonResult } from '@autodevops/codex-prompts';
 import type { Job, Project, RuntimeContract } from '@zhenfengxx/contracts';
 import { createRuntimeContract, inspectRepository } from '@zhenfengxx/repo-inspector';
-import { looksSecret, requireProject, requireTargetServer, stringArray, stringValue } from '../common.js';
-import type { ExecutorDependencies } from './types.js';
+import { isJobExecutionCancelled, looksSecret, requireProject, requireTargetServer, stringArray, stringValue } from '../common.js';
+import type { ExecutorDependencies, JobExecutionContext } from './types.js';
 
 const DEFAULT_REPO_INSTALL_TIMEOUT_MS = 60 * 60 * 1_000;
 const DEFAULT_REPO_SYNC_TIMEOUT_MS = 3 * 60 * 1_000;
 
-export async function executeRepoInspect(job: Job, dependencies: ExecutorDependencies) {
+export async function executeRepoInspect(job: Job, dependencies: ExecutorDependencies, context: JobExecutionContext) {
   const project = requireProject(job.params.project);
   const gitRef = stringValue(job.params.gitRef) || project.developmentBranch || project.defaultBranch;
-  const workspacePath = await dependencies.git.syncWorkspace(project, gitRef);
-  const commitSha = await dependencies.git.head(workspacePath);
+  const workspacePath = await dependencies.git.syncWorkspace(project, gitRef, undefined, context.signal);
+  const commitSha = await dependencies.git.head(workspacePath, context.signal);
   const inspection = inspectRepository(project.id, workspacePath);
   const automationMode = project.automationMode ?? 'deploy';
   const commandInference = automationMode === 'fetch_only'
@@ -22,7 +22,7 @@ export async function executeRepoInspect(job: Job, dependencies: ExecutorDepende
         summary: 'Fetch-only mode skips Codex command inference.',
         commands: { checkout: ['git fetch origin --tags --prune', `git checkout --detach ${commitSha}`] },
       }
-    : await inferRepositoryCommands(job, project, inspection, workspacePath, dependencies);
+    : await inferRepositoryCommands(job, project, inspection, workspacePath, dependencies, context);
   const generateRuntimeContract = job.params.generateRuntimeContract !== false;
   const contract = generateRuntimeContract
     ? createRuntimeContract(project, inspection, {
@@ -47,23 +47,23 @@ export async function executeRepoInspect(job: Job, dependencies: ExecutorDepende
   };
 }
 
-export async function executeRepoSync(job: Job, dependencies: ExecutorDependencies) {
-  return executeRepoDelivery(job, dependencies, false);
+export async function executeRepoSync(job: Job, dependencies: ExecutorDependencies, context: JobExecutionContext) {
+  return executeRepoDelivery(job, dependencies, false, context);
 }
 
-export async function executeRepoInstall(job: Job, dependencies: ExecutorDependencies) {
-  return executeRepoDelivery(job, dependencies, true);
+export async function executeRepoInstall(job: Job, dependencies: ExecutorDependencies, context: JobExecutionContext) {
+  return executeRepoDelivery(job, dependencies, true, context);
 }
 
-async function executeRepoDelivery(job: Job, dependencies: ExecutorDependencies, install: boolean) {
+async function executeRepoDelivery(job: Job, dependencies: ExecutorDependencies, install: boolean, context: JobExecutionContext) {
   const project = requireProject(job.params.project);
   const targetServer = requireTargetServer(job.params.targetServer);
   const gitRef = stringValue(job.params.gitRef) || project.developmentBranch || project.defaultBranch;
   const timeoutMs = Number(job.params.timeoutMs ?? (install ? DEFAULT_REPO_INSTALL_TIMEOUT_MS : DEFAULT_REPO_SYNC_TIMEOUT_MS));
   if (dependencies.remote.isLocal(targetServer)) {
-    const workspacePath = await dependencies.git.syncWorkspace(project, gitRef, resolve(dependencies.config.workspaceRoot, project.id));
-    const commitSha = await dependencies.git.head(workspacePath);
-    const installResult = install ? await dependencies.git.installDependencies(workspacePath, timeoutMs) : undefined;
+    const workspacePath = await dependencies.git.syncWorkspace(project, gitRef, resolve(dependencies.config.workspaceRoot, project.id), context.signal);
+    const commitSha = await dependencies.git.head(workspacePath, context.signal);
+    const installResult = install ? await dependencies.git.installDependencies(workspacePath, timeoutMs, context.signal) : undefined;
     return {
       status: 'success',
       summary: install
@@ -77,7 +77,7 @@ async function executeRepoDelivery(job: Job, dependencies: ExecutorDependencies,
       ...(installResult ? { install: installResult } : {}),
     };
   }
-  const result = await dependencies.remote.syncProject(project, targetServer, gitRef, install, timeoutMs);
+  const result = await dependencies.remote.syncProject(project, targetServer, gitRef, install, timeoutMs, context.signal);
   if (result.code !== 0) throw new Error(`Remote repo ${install ? 'install' : 'sync'} failed on ${targetServer.name}: ${result.stderr || result.stdout}`);
   if (!result.commitSha) throw new Error(`Remote repo ${install ? 'install' : 'sync'} on ${targetServer.name} did not report its resolved commit SHA.`);
   return {
@@ -107,6 +107,7 @@ async function inferRepositoryCommands(
   inspection: ReturnType<typeof inspectRepository>,
   workspacePath: string,
   dependencies: ExecutorDependencies,
+  context: JobExecutionContext,
 ) {
   const automationMode = project.automationMode === 'fetch_install' ? 'fetch_install' : 'deploy';
   const prompt = buildCommandInferencePrompt({ job, project, inspection, automationMode, workspacePath });
@@ -116,9 +117,11 @@ async function inferRepositoryCommands(
       workspacePath,
       sandbox: 'read-only',
       timeoutMs: Number(process.env.CODEX_COMMAND_INFERENCE_TIMEOUT_MS ?? '180000'),
+      signal: context.signal,
     });
     return { mode: automationMode, ...parseCodexJsonResult(result.stdout), stderr: result.stderr.slice(-4000) };
   } catch (error) {
+    if (isJobExecutionCancelled(error)) throw error;
     return { mode: automationMode, ...codexExecutionFailureResult('Codex command inference could not complete.', error) };
   }
 }

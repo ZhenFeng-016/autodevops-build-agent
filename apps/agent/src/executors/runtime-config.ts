@@ -1,10 +1,10 @@
 import type { Job, ManagedRuntimeConfigKind } from '@zhenfengxx/contracts';
 import type { TargetServer } from '../common.js';
-import type { ExecutorDependencies } from './types.js';
+import type { ExecutorDependencies, JobExecutionContext } from './types.js';
 
 const SUPPORTED_KINDS = new Set<ManagedRuntimeConfigKind>(['oak_postgres', 'oak_mysql', 'oak_redis']);
 
-export async function executeRuntimeConfigTest(job: Job, dependencies: ExecutorDependencies) {
+export async function executeRuntimeConfigTest(job: Job, dependencies: ExecutorDependencies, context: JobExecutionContext) {
   const targetServer = job.params.targetServer as TargetServer | undefined;
   const targetPath = String(job.params.targetPath ?? '');
   const kind = job.params.kind as ManagedRuntimeConfigKind | undefined;
@@ -18,7 +18,7 @@ export async function executeRuntimeConfigTest(job: Job, dependencies: ExecutorD
   if (!configId || !Number.isInteger(revision) || revision < 1) throw new Error('runtime.config.test requires configId and revision');
 
   const timeoutMs = Number(job.params.timeoutMs ?? 30_000);
-  const result = await dependencies.remote.probeRuntimeConfig(targetServer, targetPath, kind, runtimeConfig, timeoutMs);
+  const result = await dependencies.remote.probeRuntimeConfig(targetServer, targetPath, kind, runtimeConfig, timeoutMs, context.signal);
   if (result.code !== 0) {
     const detail = redactProbeError((result.stderr || result.stdout || `probe exited ${result.code}`).trim(), runtimeConfig);
     throw new Error(`Runtime config probe for ${kind} failed: ${detail}`);

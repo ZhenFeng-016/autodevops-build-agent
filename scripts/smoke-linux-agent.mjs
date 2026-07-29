@@ -70,7 +70,7 @@ try {
   for (const path of expectedPaths) {
     if (!requests.some((request) => request.path === path)) throw new Error(`Linux smoke did not call ${path}`);
   }
-  if (!stdout.includes('"protocolVersion": 1')) throw new Error(`Linux smoke version output is missing protocolVersion: ${stdout}`);
+  if (!stdout.includes('"protocolVersion": 2')) throw new Error(`Linux smoke version output is missing protocolVersion: ${stdout}`);
   if (!stdout.includes('registered linux-smoke-agent')) throw new Error(`Linux smoke agent did not start: ${stdout}\n${stderr}`);
   console.log(`Linux npm-pack smoke passed in node:24-alpine (${expectedPaths.length} lifecycle calls)`);
 } finally {

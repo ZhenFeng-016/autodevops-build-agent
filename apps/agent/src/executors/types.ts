@@ -16,4 +16,6 @@ export type ExecutorDependencies = {
   getProject(projectId: string): Promise<Project>;
 };
 
-export type JobExecutor = (job: Job, dependencies: ExecutorDependencies) => Promise<Record<string, unknown>>;
+export type JobExecutionContext = { signal?: AbortSignal };
+
+export type JobExecutor = (job: Job, dependencies: ExecutorDependencies, context: JobExecutionContext) => Promise<Record<string, unknown>>;

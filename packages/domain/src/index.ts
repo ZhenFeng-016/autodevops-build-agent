@@ -11,7 +11,7 @@ export type IncidentStatus = 'open' | 'analyzing' | 'fix_pending_review' | 'reco
 export type CodexFixStatus = 'draft' | 'pending_review' | 'approved' | 'pipeline_running' | 'merge_pending_approval' | 'merge_queued' | 'merged' | 'deployed' | 'rejected';
 export type ServerRole = 'platform' | 'build' | 'runtime' | 'observability';
 export type AgentStatus = 'online' | 'offline' | 'degraded' | 'disabled';
-export type JobStatus = 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type JobStatus = 'queued' | 'claimed' | 'running' | 'cancelling' | 'succeeded' | 'failed' | 'cancelled';
 export type JobType = 'repo.inspect' | 'repo.sync' | 'repo.install' | 'jenkins.pipeline.run' | 'codex.incident.analyze' | 'codex.fix.create_patch' | 'codex.fix.merge_to_production' | 'observability.preflight' | 'runtime.cleanup' | 'server.ssh.test' | 'runtime.config.test';
 export interface Project {
     id: string;

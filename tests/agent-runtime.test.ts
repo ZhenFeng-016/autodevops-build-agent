@@ -7,7 +7,7 @@ import test from 'node:test';
 import type { Job, JobType, Project } from '@zhenfengxx/contracts';
 import { SUPPORTED_JOB_TYPES, executeJob, type ExecutorDependencies } from '../apps/agent/src/executors/index.js';
 
-test('all protocol v1 job types execute through injected adapters', async () => {
+test('all protocol v2 job types execute through injected adapters', async () => {
   const workspace = mkdtempSync(join(tmpdir(), 'autodevops-agent-m2-'));
   mkdirSync(join(workspace, 'src'), { recursive: true });
   writeFileSync(join(workspace, 'package.json'), JSON.stringify({ name: 'fixture', scripts: { start: 'node src/server.js' }, dependencies: { express: 'latest' } }));
@@ -23,6 +23,7 @@ test('all protocol v1 job types execute through injected adapters', async () => 
       serverId: 'local-server',
       pollIntervalMs: 1,
       leaseSeconds: 3_600,
+      executionControlIntervalMs: 5_000,
       runOnce: true,
       codexCli: 'codex',
       serviceManager: 'pm2',
@@ -154,7 +155,7 @@ test('packaged CLI emits safe PM2 config and diagnostics', () => {
 
   const diagnostics = execFileSync(process.execPath, ['apps/agent/dist/cli.js', 'diagnose'], { encoding: 'utf8', env });
   const report = JSON.parse(diagnostics) as { version: { protocolVersion: number }; readiness: { status: string } };
-  assert.equal(report.version.protocolVersion, 1);
+  assert.equal(report.version.protocolVersion, 2);
   assert.match(report.readiness.status, /ready|degraded/);
   assert.doesNotMatch(diagnostics, /must-not-be-printed/);
 });

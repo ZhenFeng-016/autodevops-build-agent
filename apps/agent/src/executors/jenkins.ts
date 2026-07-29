@@ -1,8 +1,8 @@
 import type { Job } from '@zhenfengxx/contracts';
 import { requireProject, required, stringValue } from '../common.js';
-import type { ExecutorDependencies } from './types.js';
+import type { ExecutorDependencies, JobExecutionContext } from './types.js';
 
-export async function executeJenkinsRun(job: Job, dependencies: ExecutorDependencies) {
+export async function executeJenkinsRun(job: Job, dependencies: ExecutorDependencies, context: JobExecutionContext) {
   const definition = job.params.definition as { jenkinsJobName?: string; jenkinsfile?: string } | undefined;
   const project = requireProject(job.params.project);
   const jenkins = job.params.jenkins && typeof job.params.jenkins === 'object' ? job.params.jenkins as Record<string, unknown> : {};
@@ -28,6 +28,7 @@ export async function executeJenkinsRun(job: Job, dependencies: ExecutorDependen
       RUNTIME_CONFIG_LEASE_ID: stringValue(job.params.runtimeConfigLeaseId),
       RUNTIME_CONFIG_TOKEN: stringValue(job.params.runtimeConfigToken),
     },
+    signal: context.signal,
   });
   if (!result.configured) {
     return { status: 'warning', summary: 'Jenkins is not configured on this build agent; pipeline run remains queued.', jenkinsConfigured: false };
