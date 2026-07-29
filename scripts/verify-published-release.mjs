@@ -36,7 +36,7 @@ try {
   const contracts = await import(pathToFileURL(resolve(directory, 'node_modules/@zhenfengxx/contracts/dist/index.js')).href);
   const sdk = await import(pathToFileURL(resolve(directory, 'node_modules/@zhenfengxx/agent-sdk/dist/index.js')).href);
   const inspector = await import(pathToFileURL(resolve(directory, 'node_modules/@zhenfengxx/repo-inspector/dist/index.js')).href);
-  assert.equal(contracts.PROTOCOL_VERSION, 1);
+  assert.equal(contracts.PROTOCOL_VERSION, 2);
   assert.equal(contracts.AgentClaimRequestSchema.parse({ protocolVersion: 1 }).protocolVersion, 1);
   assert.equal(typeof sdk.AgentClient, 'function');
   assert.equal(typeof inspector.inspectRepository, 'function');
