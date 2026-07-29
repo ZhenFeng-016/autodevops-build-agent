@@ -1,5 +1,12 @@
 # @zhenfengxx/repo-inspector
 
+## 1.5.0
+
+### Patch Changes
+
+- Updated dependencies [0fc82de]
+  - @zhenfengxx/contracts@1.5.0
+
 ## 1.4.0
 
 ### Minor Changes
