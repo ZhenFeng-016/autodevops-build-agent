@@ -5,7 +5,7 @@ import { isLoopbackHost, shellQuote, splitShellWords, type CommandResult, type T
 import type { AgentConfig } from '../config.js';
 
 export interface RemoteAdapter {
-  syncProject(project: Project, server: TargetServer, gitRef: string, install: boolean, timeoutMs: number): Promise<CommandResult & { targetPath: string }>;
+  syncProject(project: Project, server: TargetServer, gitRef: string, install: boolean, timeoutMs: number): Promise<CommandResult & { targetPath: string; commitSha?: string }>;
   cleanupRuntime(project: Project, server: TargetServer, cleanup: RuntimeCleanupSpec, timeoutMs: number): Promise<CommandResult>;
   testConnection(server: TargetServer, timeoutMs: number): Promise<CommandResult>;
   probeRuntimeConfig(server: TargetServer, targetPath: string, kind: ManagedRuntimeConfigKind, config: Record<string, unknown>, timeoutMs: number): Promise<CommandResult>;
@@ -37,7 +37,9 @@ export class SshRemoteAdapter implements RemoteAdapter {
   async syncProject(project: Project, server: TargetServer, gitRef: string, install: boolean, timeoutMs: number) {
     const targetPath = this.targetPath(project, server);
     const script = `${repoSyncScript(project.repositoryUrl, gitRef, targetPath, this.config.gitSshKeyPath)}${install ? `\n${repoInstallScript(targetPath)}` : ''}`;
-    return { ...(await this.run(server, script, timeoutMs)), targetPath };
+    const result = await this.run(server, script, timeoutMs);
+    const commitSha = result.stdout.match(/^synced_commit:([0-9a-f]{40,64})$/im)?.[1]?.toLowerCase();
+    return { ...result, targetPath, ...(commitSha ? { commitSha } : {}) };
   }
 
   async cleanupRuntime(project: Project, server: TargetServer, cleanup: RuntimeCleanupSpec, timeoutMs: number) {
@@ -244,14 +246,30 @@ export function repoSyncScript(repositoryUrl: string, gitRef: string, targetPath
     'fi',
     transientGitRetryScript(),
     remoteGitAuthScript(gitSshKeyPath),
-    'if [ ! -d "$target/.git" ]; then run_with_git_retry git clone "$repo" "$target"; fi',
+    'if [ ! -d "$target/.git" ]; then run_with_git_retry git clone --no-checkout "$repo" "$target"; fi',
     'cd "$target"',
-    'git remote set-url origin "$repo" || true',
-    'run_with_git_retry git fetch --all --tags --prune',
-    'git checkout "$ref"',
-    'git reset --hard "$ref"',
+    'git remote set-url origin "$repo"',
+    'run_with_git_retry git fetch origin --tags --prune',
+    'branch="${ref#refs/remotes/origin/}"',
+    'branch="${branch#refs/heads/}"',
+    'branch="${branch#origin/}"',
+    'tag="${ref#refs/tags/}"',
+    'if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then',
+    '  commit="$(git rev-parse --verify "refs/remotes/origin/$branch^{commit}")"',
+    'elif git show-ref --verify --quiet "refs/tags/$tag"; then',
+    '  commit="$(git rev-parse --verify "refs/tags/$tag^{commit}")"',
+    'elif git cat-file -e "$ref^{commit}" 2>/dev/null; then',
+    '  commit="$(git rev-parse --verify "$ref^{commit}")"',
+    'else',
+    '  echo "Git ref was not found after fetching origin: $ref" >&2',
+    '  exit 75',
+    'fi',
+    'case "$commit" in (*[!0-9a-fA-F]*|\'\') echo "Resolved Git commit is invalid: $commit" >&2; exit 75;; esac',
+    'git checkout --detach "$commit"',
+    'git reset --hard "$commit"',
     'git clean -fd',
-    'printf "synced:%s:%s\\n" "$target" "$ref"',
+    'printf "synced:%s:%s:%s\\n" "$target" "$ref" "$commit"',
+    'printf "synced_commit:%s\\n" "$commit"',
   ].join('\n');
 }
 
