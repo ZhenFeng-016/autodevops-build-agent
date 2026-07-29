@@ -1,5 +1,16 @@
 # @zhenfengxx/agent-sdk
 
+## 1.5.0
+
+### Minor Changes
+
+- 0fc82de: Add protocol v2 cooperative job cancellation, lease renewal during execution, and process-tree termination so cancelled jobs release their Agent without waiting for command timeouts.
+
+### Patch Changes
+
+- Updated dependencies [0fc82de]
+  - @zhenfengxx/contracts@1.5.0
+
 ## 1.4.0
 
 ### Patch Changes
