@@ -38,6 +38,26 @@ export class ControlPlaneClient {
     return this.client.failJob(jobId, body);
   }
 
+  controlJobExecution(jobId: string, attemptId: string, leaseToken: string, leaseSeconds = this.config.leaseSeconds) {
+    return this.client.controlJobExecution(jobId, {
+      protocolVersion: PROTOCOL_VERSION,
+      agentId: this.config.agentId,
+      attemptId,
+      leaseToken,
+      leaseSeconds,
+    });
+  }
+
+  acknowledgeJobCancellation(jobId: string, attemptId: string, leaseToken: string, message?: string) {
+    return this.client.acknowledgeJobCancellation(jobId, {
+      protocolVersion: PROTOCOL_VERSION,
+      agentId: this.config.agentId,
+      attemptId,
+      leaseToken,
+      message,
+    });
+  }
+
   async project(projectId: string) {
     const response = await fetch(`${this.config.apiBaseUrl}/projects`, { headers: { Accept: 'application/json' } });
     if (!response.ok) throw new Error(`API GET /projects failed: ${response.status} ${await response.text()}`);
@@ -60,6 +80,7 @@ export const AGENT_CAPABILITIES = [
   'runtime.cleanup',
   'runtime-config-lease-v1',
   'runtime-config-probe-v1',
+  'job-control-v2',
 ] as const;
 
 export type ClaimedAgentJob = ClaimedJob | { claimed: false };

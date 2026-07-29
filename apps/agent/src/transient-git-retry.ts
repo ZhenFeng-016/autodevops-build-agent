@@ -1,4 +1,4 @@
-import { commandErrorOutput, sleep } from './common.js';
+import { commandErrorOutput, isJobExecutionCancelled, sleep, throwIfAborted } from './common.js';
 
 const TRANSIENT_GIT_FAILURE_PATTERNS = [
   /connection (?:closed|reset|timed out)/i,
@@ -35,6 +35,7 @@ export type TransientGitRetryOptions = {
   delaysMs?: number[];
   sleepFn?: (ms: number) => Promise<unknown>;
   onRetry?: (event: TransientGitRetryEvent) => void;
+  signal?: AbortSignal;
 };
 
 export function isTransientGitFailure(errorOrOutput: unknown) {
@@ -50,10 +51,11 @@ export async function withTransientGitRetry<T>(operation: (attempt: number) => P
   let attempt = 1;
 
   while (true) {
+    throwIfAborted(options.signal);
     try {
       return await operation(attempt);
     } catch (error) {
-      if (error && typeof error === 'object' && (error as { timedOut?: unknown }).timedOut === true) throw error;
+      if (isJobExecutionCancelled(error) || (error && typeof error === 'object' && (error as { timedOut?: unknown }).timedOut === true)) throw error;
       if (attempt >= maxAttempts || !isTransientGitFailure(error)) throw error;
       const delayMs = delaysMs[Math.min(attempt - 1, delaysMs.length - 1)] ?? 0;
       options.onRetry?.({
@@ -62,7 +64,10 @@ export async function withTransientGitRetry<T>(operation: (attempt: number) => P
         delayMs,
         output: commandErrorOutput(error),
       });
-      if (delayMs > 0) await sleepFn(delayMs);
+      if (delayMs > 0) {
+        if (options.sleepFn) await sleepFn(delayMs);
+        else await sleep(delayMs, options.signal);
+      }
       attempt += 1;
     }
   }

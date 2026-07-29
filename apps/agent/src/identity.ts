@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { PROTOCOL_VERSION, type AgentRegistrationRequest } from '@zhenfengxx/contracts';
+import { PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS, type AgentRegistrationRequest } from '@zhenfengxx/contracts';
 import { stringValue } from './common.js';
 
 declare const __AUTODEVOPS_AGENT_VERSION__: string;
@@ -19,7 +19,7 @@ export async function protocolIdentity(): Promise<Pick<AgentRegistrationRequest,
     agentVersion: stringValue(process.env.AUTODEVOPS_AGENT_PACKAGE_VERSION) || bundledVersion || legacyPackageVersion,
     buildRevision: stringValue(process.env.AUTODEVOPS_BUILD_REVISION) || bundledRevision || legacyRevision || await gitHead(process.cwd()).catch(() => 'development'),
     protocolVersion: PROTOCOL_VERSION,
-    supportedProtocolVersions: [PROTOCOL_VERSION],
+    supportedProtocolVersions: [...SUPPORTED_PROTOCOL_VERSIONS],
   };
 }
 

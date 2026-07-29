@@ -15,6 +15,26 @@ export type TargetServer = {
 
 export type CommandResult = { stdout: string; stderr: string; code: number | null };
 
+export class JobExecutionCancelledError extends Error {
+  readonly cancelled = true;
+
+  constructor(message = 'Job execution was cancelled') {
+    super(message);
+    this.name = 'JobExecutionCancelledError';
+  }
+}
+
+export function isJobExecutionCancelled(error: unknown) {
+  return error instanceof JobExecutionCancelledError
+    || Boolean(error && typeof error === 'object' && (error as { cancelled?: unknown; aborted?: unknown }).cancelled === true)
+    || Boolean(error && typeof error === 'object' && (error as { aborted?: unknown }).aborted === true);
+}
+
+export function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  throw new JobExecutionCancelledError(typeof signal.reason === 'string' ? signal.reason : undefined);
+}
+
 export function requireProject(value: unknown): Project {
   if (!value || typeof value !== 'object') throw new Error('project is required in job params');
   const candidate = value as Project;
@@ -82,6 +102,17 @@ function basicErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export function sleep(ms: number, signal?: AbortSignal) {
+  throwIfAborted(signal);
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new JobExecutionCancelledError(typeof signal?.reason === 'string' ? signal.reason : undefined));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }

@@ -93,6 +93,7 @@ function agentConfig(workspaceRoot: string): AgentConfig {
     agentName: 'freshness-agent',
     pollIntervalMs: 1,
     leaseSeconds: 3_600,
+    executionControlIntervalMs: 5_000,
     runOnce: true,
     codexCli: 'codex',
     serviceManager: 'pm2',

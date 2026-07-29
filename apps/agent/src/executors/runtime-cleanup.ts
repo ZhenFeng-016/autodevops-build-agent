@@ -1,14 +1,14 @@
 import type { Job } from '@zhenfengxx/contracts';
 import { requireProject, requireTargetServer } from '../common.js';
 import type { RuntimeCleanupSpec } from '../adapters/ssh.js';
-import type { ExecutorDependencies } from './types.js';
+import type { ExecutorDependencies, JobExecutionContext } from './types.js';
 
-export async function executeRuntimeCleanup(job: Job, dependencies: ExecutorDependencies) {
+export async function executeRuntimeCleanup(job: Job, dependencies: ExecutorDependencies, context: JobExecutionContext) {
   const project = requireProject(job.params.project);
   const targetServer = requireTargetServer(job.params.targetServer);
   const cleanup = cleanupSpec(job.params.cleanup);
   const timeoutMs = Number(job.params.timeoutMs ?? 180_000);
-  const result = await dependencies.remote.cleanupRuntime(project, targetServer, cleanup, timeoutMs);
+  const result = await dependencies.remote.cleanupRuntime(project, targetServer, cleanup, timeoutMs, context.signal);
   if (result.code !== 0) throw new Error(`Runtime cleanup failed on ${targetServer.name}: ${result.stderr || result.stdout}`);
   return {
     status: 'success',

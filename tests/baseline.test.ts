@@ -22,14 +22,14 @@ test('Agent SDK HMAC signatures remain deterministic and timestamp guarded', () 
 test('packaged BuildAgent reports a versioned executable', () => {
   const output = execFileSync(process.execPath, ['apps/agent/dist/cli.js', '--version'], { encoding: 'utf8' }).trim();
   const manifest = JSON.parse(readFileSync('apps/agent/package.json', 'utf8')) as { version: string };
-  assert.match(output, new RegExp(`^autodevops-agent ${manifest.version.replace(/\./g, '\\.')}\\+[a-f0-9]{12} protocol=1$`));
+  assert.match(output, new RegExp(`^autodevops-agent ${manifest.version.replace(/\./g, '\\.')}\\+[a-f0-9]{12} protocol=2$`));
   const json = JSON.parse(execFileSync(process.execPath, ['apps/agent/dist/cli.js', 'version', '--json'], { encoding: 'utf8' })) as Record<string, unknown>;
   assert.equal(json.agentVersion, manifest.version);
   assert.match(String(json.buildRevision), /^[a-f0-9]{12}$/);
-  assert.equal(json.protocolVersion, 1);
+  assert.equal(json.protocolVersion, 2);
 });
 
-test('protocol v1 validates registration and negotiates capabilities', () => {
+test('protocol v2 negotiates the highest shared version while accepting v1 agents', () => {
   const registration = AgentRegistrationRequestSchema.parse({
     id: 'agent-1',
     name: 'agent-1',
@@ -38,16 +38,18 @@ test('protocol v1 validates registration and negotiates capabilities', () => {
     readiness: { ready: true, status: 'ready', checks: [] },
     agentVersion: '1.1.0',
     buildRevision: '123456789abc',
-    protocolVersion: PROTOCOL_VERSION as 1,
-    supportedProtocolVersions: [PROTOCOL_VERSION],
+    protocolVersion: PROTOCOL_VERSION,
+    supportedProtocolVersions: [1, PROTOCOL_VERSION],
   });
   const negotiation = negotiateProtocol(registration);
   assert.equal(negotiation.compatible, true);
   assert.deepEqual(negotiation.capabilities, ['repo.inspect', 'repo.sync']);
-  assert.throws(() => AgentClaimRequestSchema.parse({ protocolVersion: 2 }));
+  assert.equal(negotiation.protocolVersion, 2);
+  assert.equal(AgentClaimRequestSchema.parse({ protocolVersion: 1 }).protocolVersion, 1);
+  assert.throws(() => AgentClaimRequestSchema.parse({ protocolVersion: 3 }));
 });
 
-test('protocol v1 validates typed job parameters at runtime', () => {
+test('protocol v2 validates typed job parameters at runtime', () => {
   const parsed = JobParamsEnvelopeSchema.parse({
     type: 'repo.inspect',
     params: {
@@ -64,7 +66,7 @@ test('protocol v1 validates typed job parameters at runtime', () => {
   }).type, 'server.ssh.test');
 });
 
-test('Agent SDK executes the authenticated register, heartbeat, claim, lease, event, complete and fail contract', async () => {
+test('Agent SDK executes the authenticated register, heartbeat, claim, control, cancellation, event, complete and fail contract', async () => {
   const requests: Array<{ path: string; body: Record<string, unknown>; headers: Headers }> = [];
   const responses = [
     { id: 'agent-1', name: 'agent-1', status: 'online', capabilities: [] },
@@ -75,6 +77,8 @@ test('Agent SDK executes the authenticated register, heartbeat, claim, lease, ev
       leaseToken: 'lease-1',
       leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
     },
+    { action: 'continue', jobStatus: 'running', leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() },
+    { ok: true },
     { id: 'event-1', jobId: 'job-1', type: 'agent.started' },
     { ok: true },
     { ok: true },
@@ -91,8 +95,8 @@ test('Agent SDK executes the authenticated register, heartbeat, claim, lease, ev
   const identity = {
     agentVersion: '1.1.0',
     buildRevision: '123456789abc',
-    protocolVersion: PROTOCOL_VERSION as 1,
-    supportedProtocolVersions: [PROTOCOL_VERSION],
+    protocolVersion: PROTOCOL_VERSION,
+    supportedProtocolVersions: [1, PROTOCOL_VERSION] as Array<1 | 2>,
   };
   const readiness = { ready: true, status: 'ready' as const, checks: [] };
   const client = new AgentClient('https://control.example.test', { agentId: 'agent-1', secret: 'contract-secret' }, fetchImpl);
@@ -101,6 +105,8 @@ test('Agent SDK executes the authenticated register, heartbeat, claim, lease, ev
   await client.heartbeat({ status: 'online', capabilities: ['repo.inspect'], readiness, ...identity });
   const claim = await client.claimJob({ protocolVersion: PROTOCOL_VERSION, capabilities: ['repo.inspect'], leaseSeconds: 60 });
   assert.equal('leaseToken' in claim ? claim.leaseToken : undefined, 'lease-1');
+  await client.controlJobExecution('job-1', { protocolVersion: PROTOCOL_VERSION, agentId: 'agent-1', attemptId: 'attempt-1', leaseToken: 'lease-1', leaseSeconds: 60 });
+  await client.acknowledgeJobCancellation('job-1', { protocolVersion: PROTOCOL_VERSION, agentId: 'agent-1', attemptId: 'attempt-1', leaseToken: 'lease-1', message: 'stopped' });
   await client.appendEvent('job-1', { agentId: 'agent-1', attemptId: 'attempt-1', type: 'agent.started' });
   await client.completeJob('job-1', { agentId: 'agent-1', attemptId: 'attempt-1', resultSummary: { ok: true } });
   await client.failJob('job-1', { agentId: 'agent-1', attemptId: 'attempt-1', errorSummary: 'contract failure' });
@@ -109,6 +115,8 @@ test('Agent SDK executes the authenticated register, heartbeat, claim, lease, ev
     '/build-agents/register',
     '/build-agents/agent-1/heartbeat',
     '/build-agents/agent-1/claim-job',
+    '/jobs/job-1/execution-control',
+    '/jobs/job-1/cancelled',
     '/jobs/job-1/events',
     '/jobs/job-1/complete',
     '/jobs/job-1/fail',

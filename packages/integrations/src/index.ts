@@ -13,6 +13,7 @@ export interface JenkinsClientOptions {
   username?: string;
   apiToken?: string;
   password?: string;
+  signal?: AbortSignal;
 }
 
 export class JenkinsClient {
@@ -27,6 +28,7 @@ export class JenkinsClient {
     const response = await fetch(`${this.options.baseUrl}/user/${encodeURIComponent(this.options.username)}/descriptorByName/jenkins.security.ApiTokenProperty/generateNewToken?${search}`, {
       method: 'POST',
       headers,
+      signal: this.options.signal,
     });
     if (!response.ok) {
       throw new Error(`Jenkins token generation failed: ${response.status} ${await response.text()}`);
@@ -48,6 +50,7 @@ export class JenkinsClient {
       method: 'POST',
       headers: { ...(await this.requestHeaders('token')), 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
+      signal: this.options.signal,
     });
     if (!response.ok) {
       throw new Error(`Jenkins trigger failed: ${response.status} ${await response.text()}`);
@@ -61,12 +64,14 @@ export class JenkinsClient {
       method: 'POST',
       headers: { ...(await this.requestHeaders('token')), 'Content-Type': 'application/xml' },
       body: configXml,
+      signal: this.options.signal,
     });
     if (createResponse.status === 400 || createResponse.status === 409) {
       const updateResponse = await fetch(`${this.options.baseUrl}/job/${encodeURIComponent(jobName)}/config.xml`, {
         method: 'POST',
         headers: { ...(await this.requestHeaders('token')), 'Content-Type': 'application/xml' },
         body: configXml,
+        signal: this.options.signal,
       });
       if (!updateResponse.ok) {
         throw new Error(`Jenkins job update failed: ${updateResponse.status} ${await updateResponse.text()}`);
@@ -94,7 +99,7 @@ export class JenkinsClient {
 
   private async fetchCrumb(headers: Record<string, string>): Promise<{ field: string; value: string } | null> {
     try {
-      const response = await fetch(`${this.options.baseUrl}/crumbIssuer/api/json`, { headers });
+      const response = await fetch(`${this.options.baseUrl}/crumbIssuer/api/json`, { headers, signal: this.options.signal });
       if (!response.ok) return null;
       const body = (await response.json()) as Record<string, unknown>;
       const field = stringValue(body.crumbRequestField);
@@ -251,17 +256,29 @@ export async function runCodexExec(input: {
   sandbox: 'read-only' | 'workspace-write';
   codexCli?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }) {
   const codexCli = input.codexCli || 'codex';
   const args = codexExecArgs(input.sandbox);
   return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(codexCli, args, { cwd: input.workspacePath, stdio: ['pipe', 'pipe', 'pipe'] });
+    if (input.signal?.aborted) {
+      reject(Object.assign(new Error('codex exec cancelled before start'), { aborted: true, cancelled: true }));
+      return;
+    }
+    const child = spawn(codexCli, args, { cwd: input.workspacePath, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+    let aborted = false;
     const timeout = setTimeout(() => {
-      child.kill('SIGTERM');
-      reject(new Error(`codex exec timed out after ${input.timeoutMs ?? 600_000}ms`));
+      timedOut = true;
+      terminateSpawnedProcessTree(child, 'SIGTERM');
     }, input.timeoutMs ?? 600_000);
+    const onAbort = () => {
+      aborted = true;
+      terminateSpawnedProcessTree(child, 'SIGTERM');
+    };
+    input.signal?.addEventListener('abort', onAbort, { once: true });
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
@@ -272,15 +289,28 @@ export async function runCodexExec(input: {
     });
     child.on('error', (error) => {
       clearTimeout(timeout);
+      input.signal?.removeEventListener('abort', onAbort);
       reject(error);
     });
     child.on('close', (code) => {
       clearTimeout(timeout);
-      if (code === 0) resolve({ stdout, stderr });
+      input.signal?.removeEventListener('abort', onAbort);
+      if (aborted) reject(Object.assign(new Error('codex exec cancelled'), { aborted: true, cancelled: true }));
+      else if (timedOut) reject(new Error(`codex exec timed out after ${input.timeoutMs ?? 600_000}ms`));
+      else if (code === 0) resolve({ stdout, stderr });
       else reject(new Error(`codex exec exited ${code}: ${stderr || stdout}`));
     });
     child.stdin.end(input.prompt);
   });
+}
+
+function terminateSpawnedProcessTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals) {
+  if (!child.pid) return;
+  if (process.platform === 'win32') {
+    spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true }).on('error', () => child.kill(signal));
+    return;
+  }
+  try { process.kill(-child.pid, signal); } catch { child.kill(signal); }
 }
 
 export function codexExecArgs(sandbox: 'read-only' | 'workspace-write') {

@@ -5,6 +5,7 @@ export type CodexRunInput = {
   workspacePath: string;
   sandbox: 'read-only' | 'workspace-write';
   timeoutMs: number;
+  signal?: AbortSignal;
 };
 
 export interface CodexAdapter {

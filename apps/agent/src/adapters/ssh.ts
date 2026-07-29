@@ -1,14 +1,15 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import type { ManagedRuntimeConfigKind, Project } from '@zhenfengxx/contracts';
-import { isLoopbackHost, shellQuote, splitShellWords, type CommandResult, type TargetServer } from '../common.js';
+import { isLoopbackHost, JobExecutionCancelledError, shellQuote, splitShellWords, type CommandResult, type TargetServer } from '../common.js';
 import type { AgentConfig } from '../config.js';
+import { terminateProcessTree } from '../process-execution.js';
 
 export interface RemoteAdapter {
-  syncProject(project: Project, server: TargetServer, gitRef: string, install: boolean, timeoutMs: number): Promise<CommandResult & { targetPath: string; commitSha?: string }>;
-  cleanupRuntime(project: Project, server: TargetServer, cleanup: RuntimeCleanupSpec, timeoutMs: number): Promise<CommandResult>;
-  testConnection(server: TargetServer, timeoutMs: number): Promise<CommandResult>;
-  probeRuntimeConfig(server: TargetServer, targetPath: string, kind: ManagedRuntimeConfigKind, config: Record<string, unknown>, timeoutMs: number): Promise<CommandResult>;
+  syncProject(project: Project, server: TargetServer, gitRef: string, install: boolean, timeoutMs: number, signal?: AbortSignal): Promise<CommandResult & { targetPath: string; commitSha?: string }>;
+  cleanupRuntime(project: Project, server: TargetServer, cleanup: RuntimeCleanupSpec, timeoutMs: number, signal?: AbortSignal): Promise<CommandResult>;
+  testConnection(server: TargetServer, timeoutMs: number, signal?: AbortSignal): Promise<CommandResult>;
+  probeRuntimeConfig(server: TargetServer, targetPath: string, kind: ManagedRuntimeConfigKind, config: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<CommandResult>;
   targetPath(project: Project, server: TargetServer): string;
   isLocal(server: TargetServer): boolean;
 }
@@ -34,24 +35,24 @@ const TRANSPORT_FORCE_KILL_MS = 5_000;
 export class SshRemoteAdapter implements RemoteAdapter {
   constructor(private readonly config: AgentConfig) {}
 
-  async syncProject(project: Project, server: TargetServer, gitRef: string, install: boolean, timeoutMs: number) {
+  async syncProject(project: Project, server: TargetServer, gitRef: string, install: boolean, timeoutMs: number, signal?: AbortSignal) {
     const targetPath = this.targetPath(project, server);
     const script = `${repoSyncScript(project.repositoryUrl, gitRef, targetPath, this.config.gitSshKeyPath)}${install ? `\n${repoInstallScript(targetPath)}` : ''}`;
-    const result = await this.run(server, script, timeoutMs);
+    const result = await this.run(server, script, timeoutMs, signal);
     const commitSha = result.stdout.match(/^synced_commit:([0-9a-f]{40,64})$/im)?.[1]?.toLowerCase();
     return { ...result, targetPath, ...(commitSha ? { commitSha } : {}) };
   }
 
-  async cleanupRuntime(project: Project, server: TargetServer, cleanup: RuntimeCleanupSpec, timeoutMs: number) {
-    return this.run(server, runtimeCleanupScript(project.id, cleanup), timeoutMs);
+  async cleanupRuntime(project: Project, server: TargetServer, cleanup: RuntimeCleanupSpec, timeoutMs: number, signal?: AbortSignal) {
+    return this.run(server, runtimeCleanupScript(project.id, cleanup), timeoutMs, signal);
   }
 
-  async testConnection(server: TargetServer, timeoutMs: number) {
-    return this.run(server, 'set -euo pipefail\nprintf "connected:%s:%s\\n" "$(hostname)" "$(id -un)"', timeoutMs);
+  async testConnection(server: TargetServer, timeoutMs: number, signal?: AbortSignal) {
+    return this.run(server, 'set -euo pipefail\nprintf "connected:%s:%s\\n" "$(hostname)" "$(id -un)"', timeoutMs, signal);
   }
 
-  async probeRuntimeConfig(server: TargetServer, targetPath: string, kind: ManagedRuntimeConfigKind, config: Record<string, unknown>, timeoutMs: number) {
-    return this.run(server, runtimeConfigProbeScript(targetPath, kind, config), timeoutMs);
+  async probeRuntimeConfig(server: TargetServer, targetPath: string, kind: ManagedRuntimeConfigKind, config: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal) {
+    return this.run(server, runtimeConfigProbeScript(targetPath, kind, config), timeoutMs, signal);
   }
 
   targetPath(project: Project, server: TargetServer) {
@@ -66,24 +67,40 @@ export class SshRemoteAdapter implements RemoteAdapter {
     return server.id === this.config.serverId;
   }
 
-  private run(server: TargetServer, script: string, timeoutMs: number) {
+  private run(server: TargetServer, script: string, timeoutMs: number, signal?: AbortSignal) {
     const args = sshArgsForServer(server, this.config.targetSshKeyPath ?? this.config.gitSshKeyPath);
-    return new Promise<CommandResult>((resolvePromise) => {
-      const child = spawn('ssh', [...args, ...remoteCommandArgs(timeoutMs)], { stdio: ['pipe', 'pipe', 'pipe'] });
+    return new Promise<CommandResult>((resolvePromise, rejectPromise) => {
+      if (signal?.aborted) {
+        rejectPromise(new JobExecutionCancelledError(typeof signal.reason === 'string' ? signal.reason : undefined));
+        return;
+      }
+      const child = spawn('ssh', [...args, ...remoteCommandArgs(timeoutMs)], { detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
+      let aborted = false;
       let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
       const timer = setTimeout(() => {
         stderr += `\nRemote command transport did not exit after ${timeoutMs}ms plus ${TRANSPORT_TIMEOUT_GRACE_MS}ms grace.`;
         child.kill('SIGTERM');
         forceKillTimer = setTimeout(() => child.kill('SIGKILL'), TRANSPORT_FORCE_KILL_MS);
       }, timeoutMs + TRANSPORT_TIMEOUT_GRACE_MS);
+      const onAbort = () => {
+        aborted = true;
+        terminateProcessTree(child, 'SIGTERM');
+        forceKillTimer = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), TRANSPORT_FORCE_KILL_MS);
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
       child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
       child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
       child.on('error', (error) => { stderr += `\n${error.message}`; });
       child.on('close', (code) => {
         clearTimeout(timer);
         if (forceKillTimer) clearTimeout(forceKillTimer);
+        signal?.removeEventListener('abort', onAbort);
+        if (aborted) {
+          rejectPromise(new JobExecutionCancelledError(typeof signal?.reason === 'string' ? signal.reason : undefined));
+          return;
+        }
         if (code === 124) stderr += `\nRemote command timed out after ${timeoutMs}ms.`;
         resolvePromise({ stdout, stderr, code });
       });

@@ -3,7 +3,10 @@ import {
   AgentClaimRequestSchema,
   AgentHeartbeatRequestSchema,
   AgentRegistrationRequestSchema,
+  JobCancellationAckRequestSchema,
   JobCompleteRequestSchema,
+  JobExecutionControlRequestSchema,
+  JobExecutionControlResponseSchema,
   JobEventRequestSchema,
   JobFailRequestSchema,
   type AgentClaimRequest,
@@ -11,7 +14,10 @@ import {
   type AgentRegistrationRequest,
   type BuildAgent,
   type ClaimedJob,
+  type JobCancellationAckRequest,
   type JobCompleteRequest,
+  type JobExecutionControlRequest,
+  type JobExecutionControlResponse,
   type JobEvent,
   type JobEventRequest,
   type JobFailRequest,
@@ -80,6 +86,15 @@ export class AgentClient {
 
   failJob(jobId: string, result: JobFailRequest) {
     return this.request(`/jobs/${encodeURIComponent(jobId)}/fail`, 'POST', JobFailRequestSchema.parse(result));
+  }
+
+  controlJobExecution(jobId: string, input: JobExecutionControlRequest) {
+    return this.request<JobExecutionControlResponse>(`/jobs/${encodeURIComponent(jobId)}/execution-control`, 'POST', JobExecutionControlRequestSchema.parse(input))
+      .then((response) => JobExecutionControlResponseSchema.parse(response));
+  }
+
+  acknowledgeJobCancellation(jobId: string, input: JobCancellationAckRequest) {
+    return this.request(`/jobs/${encodeURIComponent(jobId)}/cancelled`, 'POST', JobCancellationAckRequestSchema.parse(input));
   }
 
   async request<T = Record<string, unknown>>(path: string, method: string, body: unknown): Promise<T> {

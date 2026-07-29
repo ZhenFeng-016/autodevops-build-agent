@@ -13,6 +13,7 @@ export type AgentConfig = {
   serverId?: string;
   pollIntervalMs: number;
   leaseSeconds: number;
+  executionControlIntervalMs: number;
   runOnce: boolean;
   authSecret?: string;
   authToken?: string;
@@ -32,6 +33,7 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env): AgentConf
     serverId: env.AUTODEVOPS_AGENT_SERVER_ID,
     pollIntervalMs: Number(env.AUTODEVOPS_AGENT_POLL_INTERVAL_MS ?? '10000'),
     leaseSeconds: boundedInteger(env.AUTODEVOPS_AGENT_LEASE_SECONDS, 3_600, 30, 3_600),
+    executionControlIntervalMs: boundedInteger(env.AUTODEVOPS_AGENT_EXECUTION_CONTROL_INTERVAL_MS, 5_000, 1_000, 60_000),
     runOnce: truthy(env.AUTODEVOPS_AGENT_RUN_ONCE),
     authSecret: env.AUTODEVOPS_AGENT_AUTH_SECRET,
     authToken: env.AUTODEVOPS_AGENT_AUTH_TOKEN,
@@ -62,6 +64,7 @@ export function generatePm2Config(config: AgentConfig, executable = process.argv
           AUTODEVOPS_AGENT_NAME: config.agentName,
           AUTODEVOPS_AGENT_WORKSPACE_ROOT: config.workspaceRoot,
           AUTODEVOPS_AGENT_LEASE_SECONDS: String(config.leaseSeconds),
+          AUTODEVOPS_AGENT_EXECUTION_CONTROL_INTERVAL_MS: String(config.executionControlIntervalMs),
           ...(config.serverId ? { AUTODEVOPS_AGENT_SERVER_ID: config.serverId } : {}),
         },
       },

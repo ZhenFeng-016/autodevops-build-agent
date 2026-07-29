@@ -1,51 +1,47 @@
-import { execFile } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import { promisify } from 'node:util';
 import type { Project } from '@zhenfengxx/contracts';
-import { commandErrorOutput, stringValue } from '../common.js';
+import { commandErrorOutput, isJobExecutionCancelled, stringValue } from '../common.js';
 import type { AgentConfig } from '../config.js';
 import { execFileWithProcessTree } from '../process-execution.js';
 import { withTransientGitRetry } from '../transient-git-retry.js';
 
-const execFileAsync = promisify(execFile);
-
 export interface GitAdapter {
-  syncWorkspace(project: Project, gitRef: string, targetPath?: string): Promise<string>;
-  installDependencies(cwd: string, timeoutMs: number): Promise<Record<string, unknown>>;
-  checkoutBranch(cwd: string, branchName: string, baseCommitSha: string): Promise<void>;
-  commitAndPushFix(cwd: string, branchName: string, incident: unknown): Promise<Record<string, unknown>>;
-  mergeAndPush(cwd: string, branchName: string, targetBranch: string): Promise<string>;
-  head(cwd: string): Promise<string>;
+  syncWorkspace(project: Project, gitRef: string, targetPath?: string, signal?: AbortSignal): Promise<string>;
+  installDependencies(cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<Record<string, unknown>>;
+  checkoutBranch(cwd: string, branchName: string, baseCommitSha: string, signal?: AbortSignal): Promise<void>;
+  commitAndPushFix(cwd: string, branchName: string, incident: unknown, signal?: AbortSignal): Promise<Record<string, unknown>>;
+  mergeAndPush(cwd: string, branchName: string, targetBranch: string, signal?: AbortSignal): Promise<string>;
+  head(cwd: string, signal?: AbortSignal): Promise<string>;
 }
 
 export class SystemGitAdapter implements GitAdapter {
   constructor(private readonly config: AgentConfig) {}
 
-  async syncWorkspace(project: Project, gitRef: string, targetPath = resolve(this.config.workspaceRoot, project.id)) {
+  async syncWorkspace(project: Project, gitRef: string, targetPath = resolve(this.config.workspaceRoot, project.id), signal?: AbortSignal) {
     assertInsideWorkspace(this.config.workspaceRoot, targetPath);
     mkdirSync(this.config.workspaceRoot, { recursive: true });
     if (!existsSync(join(targetPath, '.git'))) {
-      await this.runWithTransientGitRetry('git', ['clone', '--no-checkout', project.repositoryUrl, targetPath], { timeout: 180_000 });
+      await this.runWithTransientGitRetry('git', ['clone', '--no-checkout', project.repositoryUrl, targetPath], { timeout: 180_000, signal });
     } else {
-      await this.run(targetPath, ['remote', 'set-url', 'origin', project.repositoryUrl], 30_000);
+      await this.run(targetPath, ['remote', 'set-url', 'origin', project.repositoryUrl], 30_000, signal);
     }
-    await this.runWithTransientGitRetry('git', ['fetch', 'origin', '--tags', '--prune'], { cwd: targetPath, timeout: 180_000 });
-    const commitSha = await this.resolveFetchedCommit(targetPath, gitRef);
-    await this.run(targetPath, ['checkout', '--detach', commitSha], 60_000);
-    await this.run(targetPath, ['reset', '--hard', commitSha], 60_000);
-    await this.run(targetPath, ['clean', '-fd'], 60_000);
+    await this.runWithTransientGitRetry('git', ['fetch', 'origin', '--tags', '--prune'], { cwd: targetPath, timeout: 180_000, signal });
+    const commitSha = await this.resolveFetchedCommit(targetPath, gitRef, signal);
+    await this.run(targetPath, ['checkout', '--detach', commitSha], 60_000, signal);
+    await this.run(targetPath, ['reset', '--hard', commitSha], 60_000, signal);
+    await this.run(targetPath, ['clean', '-fd'], 60_000, signal);
     if (resolve(targetPath) === resolve(this.config.workspaceRoot, project.id)) {
       materializeWorkspaceAlias(this.config.workspaceRoot, project.name, targetPath);
     }
     return targetPath;
   }
 
-  async installDependencies(cwd: string, timeoutMs: number) {
-    return this.installDependenciesRecursive(cwd, timeoutMs, new Set<string>());
+  async installDependencies(cwd: string, timeoutMs: number, signal?: AbortSignal) {
+    return this.installDependenciesRecursive(cwd, timeoutMs, new Set<string>(), signal);
   }
 
-  private async installDependenciesRecursive(cwd: string, timeoutMs: number, visited: Set<string>): Promise<Record<string, unknown>> {
+  private async installDependenciesRecursive(cwd: string, timeoutMs: number, visited: Set<string>, signal?: AbortSignal): Promise<Record<string, unknown>> {
     const canonicalPath = realpathSync(cwd);
     assertInsideWorkspace(this.config.workspaceRoot, canonicalPath);
     if (visited.has(canonicalPath)) return { skipped: true, reason: 'Local file dependency already prepared' };
@@ -56,16 +52,16 @@ export class SystemGitAdapter implements GitAdapter {
     for (const dependencyPath of localDependencies) {
       preparedLocalDependencies.push({
         path: dependencyPath,
-        install: await this.installDependenciesRecursive(dependencyPath, timeoutMs, visited),
+        install: await this.installDependenciesRecursive(dependencyPath, timeoutMs, visited, signal),
       });
     }
 
-    const install = await this.installCurrentDirectory(canonicalPath, timeoutMs);
+    const install = await this.installCurrentDirectory(canonicalPath, timeoutMs, signal);
     return localDependencies.length ? { ...install, preparedLocalDependencies } : install;
   }
 
-  private async installCurrentDirectory(cwd: string, timeoutMs: number) {
-    const npmLockTracked = existsSync(join(cwd, 'package-lock.json')) && (await this.fileIsTracked(cwd, 'package-lock.json'));
+  private async installCurrentDirectory(cwd: string, timeoutMs: number, signal?: AbortSignal) {
+    const npmLockTracked = existsSync(join(cwd, 'package-lock.json')) && (await this.fileIsTracked(cwd, 'package-lock.json', signal));
     const command = existsSync(join(cwd, 'pnpm-lock.yaml')) ? 'pnpm' : npmLockTracked ? 'npm' : existsSync(join(cwd, 'yarn.lock')) ? 'yarn' : existsSync(join(cwd, 'package.json')) ? 'npm' : '';
     if (!command) return { skipped: true, reason: 'No package.json found' };
     if (command === 'npm' && !npmLockTracked) rmSync(join(cwd, 'package-lock.json'), { force: true });
@@ -79,8 +75,8 @@ export class SystemGitAdapter implements GitAdapter {
     const env = { ...process.env, NODE_ENV: 'development', npm_config_omit: '' };
     if (command === 'npm' && shouldIsolateOakDependencyScripts(readManifest(cwd))) {
       const isolatedArgs = [...args, '--legacy-peer-deps', '--ignore-scripts'];
-      const { stdout, stderr } = await this.runWithTransientGitRetry(command, isolatedArgs, { cwd, timeout: timeoutMs, env });
-      const rootPostinstall = await this.runRootPostinstall(cwd, timeoutMs, env);
+      const { stdout, stderr } = await this.runWithTransientGitRetry(command, isolatedArgs, { cwd, timeout: timeoutMs, env, signal });
+      const rootPostinstall = await this.runRootPostinstall(cwd, timeoutMs, env, signal);
       return {
         ...installResult(command, isolatedArgs, stdout, stderr, true, false),
         dependencyScriptsSkipped: true,
@@ -89,7 +85,7 @@ export class SystemGitAdapter implements GitAdapter {
       };
     }
     try {
-      const { stdout, stderr } = await this.runWithTransientGitRetry(command, args, { cwd, timeout: timeoutMs, env });
+      const { stdout, stderr } = await this.runWithTransientGitRetry(command, args, { cwd, timeout: timeoutMs, env, signal });
       return installResult(command, args, stdout, stderr, false, false);
     } catch (error) {
       const output = commandErrorOutput(error);
@@ -97,115 +93,126 @@ export class SystemGitAdapter implements GitAdapter {
       if (args[0] === 'ci' && /can only install packages when[\s\S]*in sync/i.test(output)) {
         const installArgs = ['install', '--include=dev', '--package-lock=false'];
         try {
-          const { stdout, stderr } = await this.runWithTransientGitRetry(command, installArgs, { cwd, timeout: timeoutMs, env });
+          const { stdout, stderr } = await this.runWithTransientGitRetry(command, installArgs, { cwd, timeout: timeoutMs, env, signal });
           return { ...installResult(command, installArgs, stdout, stderr, false, true), fallbackReason: 'Committed npm lockfile is out of sync with package.json.' };
         } catch (installError) {
           if (!/\bERESOLVE\b/.test(commandErrorOutput(installError))) throw installError;
           const fallbackArgs = [...installArgs, '--legacy-peer-deps'];
-          const { stdout, stderr } = await this.runWithTransientGitRetry(command, fallbackArgs, { cwd, timeout: timeoutMs, env });
+          const { stdout, stderr } = await this.runWithTransientGitRetry(command, fallbackArgs, { cwd, timeout: timeoutMs, env, signal });
           return { ...installResult(command, fallbackArgs, stdout, stderr, true, true), fallbackReason: 'Committed npm lockfile is out of sync and strict peer dependency resolution failed.' };
         }
       }
       if (!/\bERESOLVE\b/.test(output)) throw error;
       const fallbackArgs = [...args, '--legacy-peer-deps'];
-      const { stdout, stderr } = await this.runWithTransientGitRetry(command, fallbackArgs, { cwd, timeout: timeoutMs, env });
+      const { stdout, stderr } = await this.runWithTransientGitRetry(command, fallbackArgs, { cwd, timeout: timeoutMs, env, signal });
       return { ...installResult(command, fallbackArgs, stdout, stderr, true, false), fallbackReason: 'Strict npm dependency resolution failed with ERESOLVE.' };
     }
   }
 
-  private async runRootPostinstall(cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv) {
+  private async runRootPostinstall(cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv, signal?: AbortSignal) {
     const scripts = objectRecord(readManifest(cwd).scripts);
     if (typeof scripts.postinstall !== 'string' || !scripts.postinstall.trim()) {
       return { skipped: true, reason: 'No root postinstall script found.' };
     }
     const args = ['run', 'postinstall'];
-    const { stdout, stderr } = await execFileWithProcessTree('npm', args, { cwd, timeout: timeoutMs, env });
+    const { stdout, stderr } = await execFileWithProcessTree('npm', args, { cwd, timeout: timeoutMs, env, signal });
     return installResult('npm', args, stdout, stderr, false, false);
   }
 
   private async runWithTransientGitRetry(
     command: string,
     args: string[],
-    options: { cwd?: string; timeout?: number; env?: NodeJS.ProcessEnv },
+    options: { cwd?: string; timeout?: number; env?: NodeJS.ProcessEnv; signal?: AbortSignal },
   ) {
     const packageManagerCommand = command === 'npm' || command === 'pnpm' || command === 'yarn';
     return withTransientGitRetry(
       () => packageManagerCommand
         ? execFileWithProcessTree(command, args, options)
-        : execFileAsync(command, args, { ...options, encoding: 'utf8' as const }),
+        : execFileWithProcessTree(command, args, options),
       {
         onRetry: ({ attempt, nextAttempt, delayMs }) => {
           console.warn(`Transient Git/SSH failure while running ${command}; retrying attempt ${nextAttempt}/3 after ${delayMs}ms (attempt ${attempt} failed).`);
         },
+        signal: options.signal,
       },
     );
   }
 
-  async checkoutBranch(cwd: string, branchName: string, baseCommitSha: string) {
-    const resolvedBaseCommitSha = await this.output(cwd, ['rev-parse', '--verify', `${baseCommitSha}^{commit}`]);
-    await this.run(cwd, ['checkout', '-B', branchName, resolvedBaseCommitSha]);
+  async checkoutBranch(cwd: string, branchName: string, baseCommitSha: string, signal?: AbortSignal) {
+    const resolvedBaseCommitSha = await this.output(cwd, ['rev-parse', '--verify', `${baseCommitSha}^{commit}`], 120_000, signal);
+    await this.run(cwd, ['checkout', '-B', branchName, resolvedBaseCommitSha], 120_000, signal);
   }
 
-  async commitAndPushFix(cwd: string, branchName: string, incident: unknown) {
-    await this.ensureIdentity(cwd);
-    const status = await this.output(cwd, ['status', '--porcelain']);
+  async commitAndPushFix(cwd: string, branchName: string, incident: unknown, signal?: AbortSignal) {
+    await this.ensureIdentity(cwd, signal);
+    const status = await this.output(cwd, ['status', '--porcelain'], 120_000, signal);
     if (!status) return { hasChanges: false, pushed: false };
-    await this.run(cwd, ['add', '--all']);
+    await this.run(cwd, ['add', '--all'], 120_000, signal);
     const incidentId = stringValue((incident as { id?: string })?.id) || 'incident';
-    await this.run(cwd, ['commit', '-m', `fix: autodevops ${incidentId}`], 180_000);
-    await this.run(cwd, ['push', '-u', 'origin', branchName], 180_000);
-    return { hasChanges: true, pushed: true, commitSha: await this.head(cwd) };
+    await this.run(cwd, ['commit', '-m', `fix: autodevops ${incidentId}`], 180_000, signal);
+    await this.run(cwd, ['push', '-u', 'origin', branchName], 180_000, signal);
+    return { hasChanges: true, pushed: true, commitSha: await this.head(cwd, signal) };
   }
 
-  async mergeAndPush(cwd: string, branchName: string, targetBranch: string) {
-    await this.runWithTransientGitRetry('git', ['fetch', 'origin', '--tags', '--prune'], { cwd, timeout: 180_000 });
-    const targetCommitSha = await this.resolveFetchedCommit(cwd, targetBranch);
-    const fixCommitSha = await this.resolveFetchedCommit(cwd, branchName);
-    await this.run(cwd, ['checkout', '-B', targetBranch, targetCommitSha]);
-    await this.run(cwd, ['reset', '--hard', targetCommitSha]);
-    await this.run(cwd, ['merge', '--no-ff', fixCommitSha, '-m', `Merge ${branchName} into ${targetBranch}`], 180_000);
-    await this.run(cwd, ['push', 'origin', `HEAD:refs/heads/${targetBranch}`], 180_000);
-    return this.head(cwd);
+  async mergeAndPush(cwd: string, branchName: string, targetBranch: string, signal?: AbortSignal) {
+    await this.runWithTransientGitRetry('git', ['fetch', 'origin', '--tags', '--prune'], { cwd, timeout: 180_000, signal });
+    const targetCommitSha = await this.resolveFetchedCommit(cwd, targetBranch, signal);
+    const fixCommitSha = await this.resolveFetchedCommit(cwd, branchName, signal);
+    await this.run(cwd, ['checkout', '-B', targetBranch, targetCommitSha], 120_000, signal);
+    await this.run(cwd, ['reset', '--hard', targetCommitSha], 120_000, signal);
+    await this.run(cwd, ['merge', '--no-ff', fixCommitSha, '-m', `Merge ${branchName} into ${targetBranch}`], 180_000, signal);
+    await this.run(cwd, ['push', 'origin', `HEAD:refs/heads/${targetBranch}`], 180_000, signal);
+    return this.head(cwd, signal);
   }
 
-  head(cwd: string) {
-    return this.output(cwd, ['rev-parse', '--verify', 'HEAD^{commit}']);
+  head(cwd: string, signal?: AbortSignal) {
+    return this.output(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'], 120_000, signal);
   }
 
-  private async run(cwd: string, args: string[], timeout = 120_000) {
-    await execFileAsync('git', args, { cwd, timeout });
+  private async run(cwd: string, args: string[], timeout = 120_000, signal?: AbortSignal) {
+    await execFileWithProcessTree('git', args, { cwd, timeout, signal });
   }
 
-  private async output(cwd: string, args: string[], timeout = 120_000) {
-    const { stdout } = await execFileAsync('git', args, { cwd, timeout });
+  private async output(cwd: string, args: string[], timeout = 120_000, signal?: AbortSignal) {
+    const { stdout } = await execFileWithProcessTree('git', args, { cwd, timeout, signal });
     return stdout.trim();
   }
 
-  private async resolveFetchedCommit(cwd: string, gitRef: string) {
+  private async resolveFetchedCommit(cwd: string, gitRef: string, signal?: AbortSignal) {
     const branchName = gitRef.replace(/^refs\/remotes\/origin\//, '').replace(/^refs\/heads\//, '').replace(/^origin\//, '');
     const tagName = gitRef.replace(/^refs\/tags\//, '');
     const candidates = [`refs/remotes/origin/${branchName}`, `refs/tags/${tagName}`, gitRef];
     for (const candidate of new Set(candidates)) {
-      const commitSha = await this.output(cwd, ['rev-parse', '--verify', `${candidate}^{commit}`]).catch(() => '');
+      const commitSha = await this.output(cwd, ['rev-parse', '--verify', `${candidate}^{commit}`], 120_000, signal).catch((error) => {
+        if (isJobExecutionCancelled(error)) throw error;
+        return '';
+      });
       if (/^[0-9a-f]{40,64}$/i.test(commitSha)) return commitSha.toLowerCase();
     }
     throw new Error(`Git ref was not found after fetching origin: ${gitRef}`);
   }
 
-  private async fileIsTracked(cwd: string, path: string) {
+  private async fileIsTracked(cwd: string, path: string, signal?: AbortSignal) {
     try {
-      await execFileAsync('git', ['ls-files', '--error-unmatch', '--', path], { cwd, timeout: 10_000 });
+      await execFileWithProcessTree('git', ['ls-files', '--error-unmatch', '--', path], { cwd, timeout: 10_000, signal });
       return true;
-    } catch {
+    } catch (error) {
+      if (isJobExecutionCancelled(error)) throw error;
       return false;
     }
   }
 
-  private async ensureIdentity(cwd: string) {
-    const currentEmail = await this.output(cwd, ['config', '--get', 'user.email']).catch(() => '');
-    const currentName = await this.output(cwd, ['config', '--get', 'user.name']).catch(() => '');
-    if (!currentEmail) await this.run(cwd, ['config', 'user.email', process.env.AUTODEVOPS_GIT_EMAIL || 'autodevops-agent@example.local']);
-    if (!currentName) await this.run(cwd, ['config', 'user.name', process.env.AUTODEVOPS_GIT_NAME || 'AutoDevOps Agent']);
+  private async ensureIdentity(cwd: string, signal?: AbortSignal) {
+    const currentEmail = await this.output(cwd, ['config', '--get', 'user.email'], 120_000, signal).catch((error) => {
+      if (isJobExecutionCancelled(error)) throw error;
+      return '';
+    });
+    const currentName = await this.output(cwd, ['config', '--get', 'user.name'], 120_000, signal).catch((error) => {
+      if (isJobExecutionCancelled(error)) throw error;
+      return '';
+    });
+    if (!currentEmail) await this.run(cwd, ['config', 'user.email', process.env.AUTODEVOPS_GIT_EMAIL || 'autodevops-agent@example.local'], 120_000, signal);
+    if (!currentName) await this.run(cwd, ['config', 'user.name', process.env.AUTODEVOPS_GIT_NAME || 'AutoDevOps Agent'], 120_000, signal);
   }
 }
 

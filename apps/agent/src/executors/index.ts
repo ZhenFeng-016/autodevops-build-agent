@@ -6,7 +6,7 @@ import { executeRepoInspect, executeRepoInstall, executeRepoSync } from './repo.
 import { executeRuntimeCleanup } from './runtime-cleanup.js';
 import { executeRuntimeConfigTest } from './runtime-config.js';
 import { executeServerSshTest } from './server-ssh.js';
-import type { ExecutorDependencies, JobExecutor } from './types.js';
+import type { ExecutorDependencies, JobExecutionContext, JobExecutor } from './types.js';
 
 const EXECUTORS: Record<JobType, JobExecutor> = {
   'repo.inspect': executeRepoInspect,
@@ -24,11 +24,11 @@ const EXECUTORS: Record<JobType, JobExecutor> = {
 
 export const SUPPORTED_JOB_TYPES = Object.freeze(Object.keys(EXECUTORS) as JobType[]);
 
-export async function executeJob(job: Job, dependencies: ExecutorDependencies) {
+export async function executeJob(job: Job, dependencies: ExecutorDependencies, context: JobExecutionContext = {}) {
   JobParamsEnvelopeSchema.parse({ type: job.type, params: job.params });
   const executor = EXECUTORS[job.type];
   if (!executor) throw new Error(`Unsupported job type: ${job.type}`);
-  return executor(job, dependencies);
+  return executor(job, dependencies, context);
 }
 
-export type { ExecutorDependencies } from './types.js';
+export type { ExecutorDependencies, JobExecutionContext } from './types.js';
