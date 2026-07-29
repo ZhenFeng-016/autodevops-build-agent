@@ -27,12 +27,13 @@ export async function executeCodexFix(job: Job, dependencies: ExecutorDependenci
   const baseBranch = stringValue(job.params.baseBranch) || project.productionBranch || project.defaultBranch;
   const targetBranch = stringValue(job.params.targetBranch) || project.productionBranch || project.defaultBranch;
   const workspacePath = await dependencies.git.syncWorkspace(project, baseBranch);
+  const baseCommitSha = await dependencies.git.head(workspacePath);
   const branchName = stringValue(job.params.branchName) || generateCodexFixBranchName({
     projectId: project.id,
     incidentId: stringValue(job.incidentId) || job.id,
     fixId: stringValue(job.codexFixId) || job.id,
   });
-  await dependencies.git.checkoutBranch(workspacePath, branchName, baseBranch);
+  await dependencies.git.checkoutBranch(workspacePath, branchName, baseCommitSha);
   const prompt = buildFixApplyPrompt({ job, incident, workspacePath, branchName, baseBranch, targetBranch });
   try {
     const result = await dependencies.codex.run({
@@ -47,6 +48,7 @@ export async function executeCodexFix(job: Job, dependencies: ExecutorDependenci
       ...parsed,
       branchName,
       baseBranch,
+      baseCommitSha,
       targetBranch,
       commitSha: commit.commitSha,
       pushed: commit.pushed,
@@ -55,7 +57,7 @@ export async function executeCodexFix(job: Job, dependencies: ExecutorDependenci
       stderr: result.stderr.slice(-4000),
     };
   } catch (error) {
-    return { ...codexExecutionFailureResult('Codex fix job could not complete.', error), branchName, baseBranch, targetBranch, workspacePath };
+    return { ...codexExecutionFailureResult('Codex fix job could not complete.', error), branchName, baseBranch, baseCommitSha, targetBranch, workspacePath };
   }
 }
 
@@ -66,6 +68,7 @@ export async function executeCodexFixMerge(job: Job, dependencies: ExecutorDepen
   const targetBranch = stringValue(job.params.targetBranch) || fix?.targetBranch || project.productionBranch || project.defaultBranch;
   const baseBranch = stringValue(job.params.baseBranch) || fix?.baseBranch || targetBranch;
   const workspacePath = await dependencies.git.syncWorkspace(project, targetBranch);
+  const targetCommitSha = await dependencies.git.head(workspacePath);
   const mergeCommitSha = await dependencies.git.mergeAndPush(workspacePath, branchName, targetBranch);
   return {
     status: 'success',
@@ -73,6 +76,7 @@ export async function executeCodexFixMerge(job: Job, dependencies: ExecutorDepen
     branchName,
     baseBranch,
     targetBranch,
+    targetCommitSha,
     mergeCommitSha,
     workspacePath,
   };

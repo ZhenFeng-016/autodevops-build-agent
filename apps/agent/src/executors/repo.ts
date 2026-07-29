@@ -12,6 +12,7 @@ export async function executeRepoInspect(job: Job, dependencies: ExecutorDepende
   const project = requireProject(job.params.project);
   const gitRef = stringValue(job.params.gitRef) || project.developmentBranch || project.defaultBranch;
   const workspacePath = await dependencies.git.syncWorkspace(project, gitRef);
+  const commitSha = await dependencies.git.head(workspacePath);
   const inspection = inspectRepository(project.id, workspacePath);
   const automationMode = project.automationMode ?? 'deploy';
   const commandInference = automationMode === 'fetch_only'
@@ -19,7 +20,7 @@ export async function executeRepoInspect(job: Job, dependencies: ExecutorDepende
         mode: automationMode,
         status: 'skipped',
         summary: 'Fetch-only mode skips Codex command inference.',
-        commands: { checkout: ['git fetch --all --tags --prune', `git checkout ${gitRef}`] },
+        commands: { checkout: ['git fetch origin --tags --prune', `git checkout --detach ${commitSha}`] },
       }
     : await inferRepositoryCommands(job, project, inspection, workspacePath, dependencies);
   const generateRuntimeContract = job.params.generateRuntimeContract !== false;
@@ -36,6 +37,8 @@ export async function executeRepoInspect(job: Job, dependencies: ExecutorDepende
     status: 'success',
     summary: generateRuntimeContract ? 'Repository inspected and runtime contract generated.' : 'Repository inspected.',
     workspacePath,
+    gitRef,
+    commitSha,
     inspection,
     automationMode,
     commandInference,
@@ -59,6 +62,7 @@ async function executeRepoDelivery(job: Job, dependencies: ExecutorDependencies,
   const timeoutMs = Number(job.params.timeoutMs ?? (install ? DEFAULT_REPO_INSTALL_TIMEOUT_MS : DEFAULT_REPO_SYNC_TIMEOUT_MS));
   if (dependencies.remote.isLocal(targetServer)) {
     const workspacePath = await dependencies.git.syncWorkspace(project, gitRef, resolve(dependencies.config.workspaceRoot, project.id));
+    const commitSha = await dependencies.git.head(workspacePath);
     const installResult = install ? await dependencies.git.installDependencies(workspacePath, timeoutMs) : undefined;
     return {
       status: 'success',
@@ -69,11 +73,13 @@ async function executeRepoDelivery(job: Job, dependencies: ExecutorDependencies,
       targetServerId: targetServer.id,
       targetPath: workspacePath,
       gitRef,
+      commitSha,
       ...(installResult ? { install: installResult } : {}),
     };
   }
   const result = await dependencies.remote.syncProject(project, targetServer, gitRef, install, timeoutMs);
   if (result.code !== 0) throw new Error(`Remote repo ${install ? 'install' : 'sync'} failed on ${targetServer.name}: ${result.stderr || result.stdout}`);
+  if (!result.commitSha) throw new Error(`Remote repo ${install ? 'install' : 'sync'} on ${targetServer.name} did not report its resolved commit SHA.`);
   return {
     status: 'success',
     summary: install
@@ -83,6 +89,7 @@ async function executeRepoDelivery(job: Job, dependencies: ExecutorDependencies,
     targetServerId: targetServer.id,
     targetPath: result.targetPath,
     gitRef,
+    commitSha: result.commitSha,
     stdout: result.stdout.slice(-4000),
     stderr: result.stderr.slice(-4000),
     ...(install

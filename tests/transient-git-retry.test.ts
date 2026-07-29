@@ -52,6 +52,11 @@ test('remote repository delivery retries sync and package-manager Git transport 
 
   assert.match(syncScript, /run_with_git_retry git clone/);
   assert.match(syncScript, /run_with_git_retry git fetch/);
+  assert.match(syncScript, /refs\/remotes\/origin\/\$branch/);
+  assert.match(syncScript, /git checkout --detach "\$commit"/);
+  assert.match(syncScript, /synced_commit:%s/);
+  assert.doesNotMatch(syncScript, /git checkout "\$ref"/);
+  assert.doesNotMatch(syncScript, /git reset --hard "\$ref"/);
   assert.match(installScript, /run_with_git_retry pnpm install/);
   assert.match(installScript, /run_with_git_retry yarn install/);
   assert.match(installScript, /run_with_git_retry "\$@"/);

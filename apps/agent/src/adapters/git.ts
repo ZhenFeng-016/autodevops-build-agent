@@ -5,7 +5,6 @@ import { promisify } from 'node:util';
 import type { Project } from '@zhenfengxx/contracts';
 import { commandErrorOutput, stringValue } from '../common.js';
 import type { AgentConfig } from '../config.js';
-import { gitHead } from '../identity.js';
 import { execFileWithProcessTree } from '../process-execution.js';
 import { withTransientGitRetry } from '../transient-git-retry.js';
 
@@ -14,7 +13,7 @@ const execFileAsync = promisify(execFile);
 export interface GitAdapter {
   syncWorkspace(project: Project, gitRef: string, targetPath?: string): Promise<string>;
   installDependencies(cwd: string, timeoutMs: number): Promise<Record<string, unknown>>;
-  checkoutBranch(cwd: string, branchName: string, baseBranch: string): Promise<void>;
+  checkoutBranch(cwd: string, branchName: string, baseCommitSha: string): Promise<void>;
   commitAndPushFix(cwd: string, branchName: string, incident: unknown): Promise<Record<string, unknown>>;
   mergeAndPush(cwd: string, branchName: string, targetBranch: string): Promise<string>;
   head(cwd: string): Promise<string>;
@@ -27,12 +26,14 @@ export class SystemGitAdapter implements GitAdapter {
     assertInsideWorkspace(this.config.workspaceRoot, targetPath);
     mkdirSync(this.config.workspaceRoot, { recursive: true });
     if (!existsSync(join(targetPath, '.git'))) {
-      await this.runWithTransientGitRetry('git', ['clone', '--branch', gitRef, project.repositoryUrl, targetPath], { timeout: 180_000 });
+      await this.runWithTransientGitRetry('git', ['clone', '--no-checkout', project.repositoryUrl, targetPath], { timeout: 180_000 });
     } else {
-      await this.runWithTransientGitRetry('git', ['fetch', '--all', '--tags', '--prune'], { cwd: targetPath, timeout: 180_000 });
+      await this.run(targetPath, ['remote', 'set-url', 'origin', project.repositoryUrl], 30_000);
     }
-    await this.run(targetPath, ['checkout', gitRef], 60_000);
-    await this.run(targetPath, ['reset', '--hard', 'HEAD'], 60_000);
+    await this.runWithTransientGitRetry('git', ['fetch', 'origin', '--tags', '--prune'], { cwd: targetPath, timeout: 180_000 });
+    const commitSha = await this.resolveFetchedCommit(targetPath, gitRef);
+    await this.run(targetPath, ['checkout', '--detach', commitSha], 60_000);
+    await this.run(targetPath, ['reset', '--hard', commitSha], 60_000);
     await this.run(targetPath, ['clean', '-fd'], 60_000);
     if (resolve(targetPath) === resolve(this.config.workspaceRoot, project.id)) {
       materializeWorkspaceAlias(this.config.workspaceRoot, project.name, targetPath);
@@ -140,8 +141,9 @@ export class SystemGitAdapter implements GitAdapter {
     );
   }
 
-  async checkoutBranch(cwd: string, branchName: string, baseBranch: string) {
-    await this.run(cwd, ['checkout', '-B', branchName, baseBranch]);
+  async checkoutBranch(cwd: string, branchName: string, baseCommitSha: string) {
+    const resolvedBaseCommitSha = await this.output(cwd, ['rev-parse', '--verify', `${baseCommitSha}^{commit}`]);
+    await this.run(cwd, ['checkout', '-B', branchName, resolvedBaseCommitSha]);
   }
 
   async commitAndPushFix(cwd: string, branchName: string, incident: unknown) {
@@ -156,16 +158,18 @@ export class SystemGitAdapter implements GitAdapter {
   }
 
   async mergeAndPush(cwd: string, branchName: string, targetBranch: string) {
-    await this.run(cwd, ['fetch', 'origin', branchName], 180_000).catch(() => undefined);
-    await this.run(cwd, ['checkout', targetBranch]);
-    await this.run(cwd, ['reset', '--hard', `origin/${targetBranch}`]).catch(() => this.run(cwd, ['reset', '--hard', targetBranch]));
-    await this.run(cwd, ['merge', '--no-ff', branchName, '-m', `Merge ${branchName} into ${targetBranch}`], 180_000);
-    await this.run(cwd, ['push', 'origin', targetBranch], 180_000);
+    await this.runWithTransientGitRetry('git', ['fetch', 'origin', '--tags', '--prune'], { cwd, timeout: 180_000 });
+    const targetCommitSha = await this.resolveFetchedCommit(cwd, targetBranch);
+    const fixCommitSha = await this.resolveFetchedCommit(cwd, branchName);
+    await this.run(cwd, ['checkout', '-B', targetBranch, targetCommitSha]);
+    await this.run(cwd, ['reset', '--hard', targetCommitSha]);
+    await this.run(cwd, ['merge', '--no-ff', fixCommitSha, '-m', `Merge ${branchName} into ${targetBranch}`], 180_000);
+    await this.run(cwd, ['push', 'origin', `HEAD:refs/heads/${targetBranch}`], 180_000);
     return this.head(cwd);
   }
 
   head(cwd: string) {
-    return gitHead(cwd);
+    return this.output(cwd, ['rev-parse', '--verify', 'HEAD^{commit}']);
   }
 
   private async run(cwd: string, args: string[], timeout = 120_000) {
@@ -175,6 +179,17 @@ export class SystemGitAdapter implements GitAdapter {
   private async output(cwd: string, args: string[], timeout = 120_000) {
     const { stdout } = await execFileAsync('git', args, { cwd, timeout });
     return stdout.trim();
+  }
+
+  private async resolveFetchedCommit(cwd: string, gitRef: string) {
+    const branchName = gitRef.replace(/^refs\/remotes\/origin\//, '').replace(/^refs\/heads\//, '').replace(/^origin\//, '');
+    const tagName = gitRef.replace(/^refs\/tags\//, '');
+    const candidates = [`refs/remotes/origin/${branchName}`, `refs/tags/${tagName}`, gitRef];
+    for (const candidate of new Set(candidates)) {
+      const commitSha = await this.output(cwd, ['rev-parse', '--verify', `${candidate}^{commit}`]).catch(() => '');
+      if (/^[0-9a-f]{40,64}$/i.test(commitSha)) return commitSha.toLowerCase();
+    }
+    throw new Error(`Git ref was not found after fetching origin: ${gitRef}`);
   }
 
   private async fileIsTracked(cwd: string, path: string) {

@@ -50,7 +50,7 @@ test('all protocol v1 job types execute through injected adapters', async () => 
       targetPath: () => '/opt/autodevops/workspaces/fixture',
       syncProject: async () => {
         calls.remote += 1;
-        return { code: 0, stdout: 'synced', stderr: '', targetPath: '/opt/autodevops/workspaces/fixture' };
+        return { code: 0, stdout: 'synced', stderr: '', targetPath: '/opt/autodevops/workspaces/fixture', commitSha: 'def456abc123def456abc123def456abc123def4' };
       },
       cleanupRuntime: async () => {
         calls.cleanup += 1;
@@ -110,10 +110,13 @@ test('all protocol v1 job types execute through injected adapters', async () => 
   assert.deepEqual([...results.keys()].sort(), [...SUPPORTED_JOB_TYPES].sort());
   assert.ok(results.get('repo.inspect')?.contract);
   assert.equal(results.get('repo.sync')?.mode, 'ssh');
+  assert.equal(results.get('repo.sync')?.commitSha, 'def456abc123def456abc123def456abc123def4');
   assert.equal(results.get('repo.install')?.mode, 'local');
+  assert.equal(results.get('repo.install')?.commitSha, 'def456abc123');
   assert.equal(results.get('jenkins.pipeline.run')?.jenkinsConfigured, true);
   assert.equal((results.get('codex.incident.analyze')?.analysis as { status: string }).status, 'success');
   assert.equal(results.get('codex.fix.create_patch')?.pushed, true);
+  assert.equal(results.get('codex.fix.create_patch')?.baseCommitSha, 'def456abc123');
   assert.equal(results.get('codex.fix.merge_to_production')?.mergeCommitSha, 'def456abc123');
   assert.equal(results.get('observability.preflight')?.status, 'success');
   assert.equal(results.get('runtime.cleanup')?.status, 'success');
