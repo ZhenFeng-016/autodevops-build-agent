@@ -1,5 +1,16 @@
 # @zhenfengxx/repo-inspector
 
+## 1.4.0
+
+### Minor Changes
+
+- e434c1b: Detect platform-managed Oak PostgreSQL, MySQL, and Redis runtime configuration requirements, advertise runtime-config capabilities, and submit Jenkins parameters in the POST body so sensitive values do not enter URLs.
+
+### Patch Changes
+
+- Updated dependencies [e434c1b]
+  - @zhenfengxx/contracts@1.4.0
+
 ## 1.3.0
 
 ### Minor Changes
