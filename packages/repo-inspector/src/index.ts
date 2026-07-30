@@ -38,7 +38,7 @@ export const OAK_SOURCE_MARKERS = [
 ];
 
 export const OAK_CODEGEN_SCRIPT_ORDER = ['project:init', 'make:domain', 'make:locale', 'make:dep'];
-export const OAK_VALIDATION_SCRIPT_ORDER = ['check', 'build:lib', 'build:es'];
+export const OAK_VALIDATION_SCRIPT_ORDER = ['check', 'test'];
 
 const RUNTIME_CONFIG_DEFINITIONS: ReadonlyArray<{
   kind: ManagedRuntimeConfigKind;
@@ -142,7 +142,8 @@ export function createRuntimeContract(project: Project, inspection: RepoInspecti
     : [];
   const validationCommands = OAK_VALIDATION_SCRIPT_ORDER.filter((name) => inspection.scripts[name]).map(script);
   const fallbackValidation = validationCommands.length ? validationCommands : inspection.scripts.test ? [script('test')] : [];
-  const frontendBuildCommand = inspection.scripts.build ? script('build') : undefined;
+  const inferredBuild = inferBuildCommands(inspection);
+  const pm2StartCommand = inferPm2StartCommand(inspection);
   const healthPath = project.healthPath;
   const runtimeConfigRequirements = inspection.oak.runtimeConfigRequirements ?? [];
   const databaseConfigurationFiles = runtimeConfigRequirements
@@ -166,8 +167,9 @@ export function createRuntimeContract(project: Project, inspection: RepoInspecti
       installCommand: installCommand(inspection.packageManager),
       codegenCommands,
       validationCommands: fallbackValidation,
-      frontendBuildCommand,
-      frontendDistDir: frontendBuildCommand ? 'dist' : undefined,
+      serverBuildCommand: inferredBuild.serverBuildCommand,
+      frontendBuildCommand: inferredBuild.frontendBuildCommand,
+      frontendDistDir: inferredBuild.frontendDistDir,
       ...overrides.build,
     },
     deploy: {
@@ -194,7 +196,7 @@ export function createRuntimeContract(project: Project, inspection: RepoInspecti
         ? {
             appName: project.id,
             ecosystemFile: inspection.pm2Configs[0] || 'ecosystem.config.js',
-            startCommand: inspection.scripts['server:start'] ? script('server:start') : inspection.scripts.start ? script('start') : 'npm run start',
+            startCommand: pm2StartCommand,
             ...overrides.pm2,
           }
         : undefined,
@@ -244,6 +246,47 @@ export function createRuntimeContract(project: Project, inspection: RepoInspecti
       ...(overrides.requiresApproval ?? []),
     ],
   };
+}
+
+function inferBuildCommands(inspection: RepoInspection): Pick<RuntimeContract['build'], 'serverBuildCommand' | 'frontendBuildCommand' | 'frontendDistDir'> {
+  const script = (name: string) => scriptCommand(inspection.packageManager, name);
+  const genericBuild = inspection.scripts.build;
+  const explicitWebBuild = inspection.scripts['build:web'];
+  const genericFrontendBuild = genericBuild && looksLikeStaticFrontendBuild(genericBuild);
+  const frontendBuildCommand = explicitWebBuild ? script('build:web') : genericFrontendBuild ? script('build') : undefined;
+  const serverBuildCommand = genericBuild && !genericFrontendBuild ? script('build') : inspection.scripts['build:server'] ? script('build:server') : undefined;
+  const frontendDistDir = frontendBuildCommand
+    ? inferFrontendDistDir(inspection, explicitWebBuild ?? genericBuild ?? '')
+    : undefined;
+  return { serverBuildCommand, frontendBuildCommand, frontendDistDir };
+}
+
+function inferFrontendDistDir(inspection: RepoInspection, command: string) {
+  const configuredBuildPath = command.match(/(?:^|\s)BUILD_PATH=([^\s&]+)/)?.[1]?.replace(/^['"]|['"]$/g, '');
+  if (inspection.oak.detected && /oak-cli\s+build\b[\s\S]*--target\s+(?:web|browser)\b/i.test(command)) {
+    const subDir = command.match(/--sub(?:D|d)ir(?:=|\s+)([^\s]+)/)?.[1]?.replace(/^['"]|['"]$/g, '') || 'web';
+    return `${subDir}/${configuredBuildPath || 'build'}`.replace(/\\/g, '/');
+  }
+  if (/react-scripts\s+build\b/i.test(command)) return configuredBuildPath || 'build';
+  if (/\b(?:vite|ng)\s+build\b/i.test(command)) return configuredBuildPath || 'dist';
+  return undefined;
+}
+
+function looksLikeStaticFrontendBuild(command: string) {
+  return /\b(?:vite|ng)\s+build\b|react-scripts\s+build\b/i.test(command);
+}
+
+function inferPm2StartCommand(inspection: RepoInspection) {
+  const script = (name: string) => scriptCommand(inspection.packageManager, name);
+  if (inspection.scripts.start && !looksLikeDevelopmentStart(inspection.scripts.start)) return script('start');
+  if (inspection.scripts['server:start'] && !looksLikeDevelopmentStart(inspection.scripts['server:start'])) return script('server:start');
+  if (existsSync(join(inspection.repositoryPath, 'scripts/startServer.js'))) return 'node scripts/startServer.js';
+  if (existsSync(join(inspection.repositoryPath, 'server.js'))) return 'node server.js';
+  return '';
+}
+
+function looksLikeDevelopmentStart(command: string) {
+  return /\b(?:development|dev|watch|nodemon|tsx\s+watch|ts-node-dev)\b/i.test(command);
 }
 
 function inspectRuntimeConfigRequirements(repositoryPath: string, databaseConfigFiles: string[]): ManagedRuntimeConfigRequirement[] {

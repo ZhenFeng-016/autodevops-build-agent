@@ -10,8 +10,10 @@ import { SUPPORTED_JOB_TYPES, executeJob, type ExecutorDependencies } from '../a
 test('all protocol v2 job types execute through injected adapters', async () => {
   const workspace = mkdtempSync(join(tmpdir(), 'autodevops-agent-m2-'));
   mkdirSync(join(workspace, 'src'), { recursive: true });
-  writeFileSync(join(workspace, 'package.json'), JSON.stringify({ name: 'fixture', scripts: { start: 'node src/server.js' }, dependencies: { express: 'latest' } }));
+  mkdirSync(join(workspace, 'scripts'), { recursive: true });
+  writeFileSync(join(workspace, 'package.json'), JSON.stringify({ name: 'fixture', scripts: { start: 'node src/server.js', 'server:start': 'cross-env NODE_ENV=development node watch.js' }, dependencies: { express: 'latest' } }));
   writeFileSync(join(workspace, 'src', 'server.js'), 'console.log("fixture")\n');
+  writeFileSync(join(workspace, 'scripts', 'startServer.js'), 'require("../src/server")\n');
   const calls = { codex: 0, checkout: 0, commit: 0, merge: 0, install: 0, installTimeoutMs: 0, remote: 0, cleanup: 0, sshTest: 0, configTest: 0, jenkins: 0 };
   const project = fixtureProject();
   const dependencies: ExecutorDependencies = {
@@ -69,7 +71,7 @@ test('all protocol v2 job types execute through injected adapters', async () => 
     codex: {
       run: async () => {
         calls.codex += 1;
-        return { stdout: '{"status":"success","summary":"adapter result"}', stderr: '' };
+        return { stdout: '{"status":"success","summary":"adapter result","runtimeContract":{"pm2StartCommand":"npm run server:start"}}', stderr: '' };
       },
     },
     jenkins: {
@@ -110,6 +112,7 @@ test('all protocol v2 job types execute through injected adapters', async () => 
 
   assert.deepEqual([...results.keys()].sort(), [...SUPPORTED_JOB_TYPES].sort());
   assert.ok(results.get('repo.inspect')?.contract);
+  assert.equal((results.get('repo.inspect')?.contract as { pm2?: { startCommand?: string } }).pm2?.startCommand, 'npm run start');
   assert.equal(results.get('repo.sync')?.mode, 'ssh');
   assert.equal(results.get('repo.sync')?.commitSha, 'def456abc123def456abc123def456abc123def4');
   assert.equal(results.get('repo.install')?.mode, 'local');
