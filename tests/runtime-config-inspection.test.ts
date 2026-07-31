@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import type { Project } from '@zhenfengxx/contracts';
+import { buildCommandInferencePrompt } from '@autodevops/codex-prompts';
 import { createRuntimeContract, inspectRepository } from '@zhenfengxx/repo-inspector';
 
 test('Oak runtime config inspection derives postgres and build-time redis requirements from safe templates', () => {
@@ -55,6 +56,77 @@ test('Oak runtime config inspection reports a tracked real config without readin
     assert.equal(requirement.gitIgnored, false);
     assert.deepEqual(requirement.templateKeys, ['database', 'host', 'password', 'user']);
     assert.doesNotMatch(JSON.stringify(requirement), /do-not-inspect/);
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Oak runtime contract separates server build, web build output, and production PM2 start', () => {
+  const root = createFixture();
+  try {
+    write(root, 'package.json', JSON.stringify({
+      name: 'oak-fixture',
+      dependencies: { 'oak-backend-base': '^1.0.0' },
+      scripts: {
+        build: 'npm run build:lib && npm run build:es',
+        'build:lib': 'oak-cli build --target tsc --configFile tsconfig.lib.json',
+        'build:es': 'oak-cli build --target tsc --configFile tsconfig.es.json --noEmit',
+        'build:web': 'oak-cli build --target web --mode production --vite --useOutlet',
+        'server:start': 'cross-env NODE_ENV=development oak-cli watch',
+      },
+    }));
+    write(root, 'scripts/startServer.js', 'require("../lib/server")\n');
+
+    const contract = createRuntimeContract(project(), inspectRepository('project-1', root));
+
+    assert.equal(contract.build.serverBuildCommand, 'npm run build');
+    assert.equal(contract.build.frontendBuildCommand, 'npm run build:web');
+    assert.equal(contract.build.frontendDistDir, 'web/build');
+    assert.deepEqual(contract.build.validationCommands, []);
+    assert.equal(contract.pm2?.startCommand, 'node scripts/startServer.js');
+    assert.equal(contract.commandApproval, undefined);
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('generic Vite build is frontend-only and uses the Vite output directory', () => {
+  const root = createFixture();
+  try {
+    write(root, 'package.json', JSON.stringify({ name: 'vite-fixture', scripts: { build: 'vite build', start: 'node server.js' } }));
+
+    const contract = createRuntimeContract(project(), inspectRepository('project-1', root));
+
+    assert.equal(contract.build.serverBuildCommand, undefined);
+    assert.equal(contract.build.frontendBuildCommand, 'npm run build');
+    assert.equal(contract.build.frontendDistDir, 'dist');
+    assert.equal(contract.pm2?.startCommand, 'npm run start');
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('command inference prompt requires four evidence-backed Runtime Contract fields', () => {
+  const root = createFixture();
+  try {
+    const fixtureProject = project();
+    const prompt = buildCommandInferencePrompt({
+      job: { id: 'job-1', type: 'repo.inspect', status: 'running', requiredCapabilities: [], params: {}, priority: 100 },
+      project: fixtureProject,
+      inspection: inspectRepository(fixtureProject.id, root),
+      automationMode: 'deploy',
+      workspacePath: root,
+    });
+
+    assert.match(prompt, /serverBuildCommand/);
+    assert.match(prompt, /frontendBuildCommand/);
+    assert.match(prompt, /frontendDistDir/);
+    assert.match(prompt, /pm2StartCommand/);
+    assert.match(prompt, /generic package\.json build script is not automatically a frontend build/i);
+    assert.match(prompt, /development\/watch commands as PM2 production start commands/i);
   }
   finally {
     rmSync(root, { recursive: true, force: true });

@@ -23,14 +23,18 @@ export async function executeRepoInspect(job: Job, dependencies: ExecutorDepende
         commands: { checkout: ['git fetch origin --tags --prune', `git checkout --detach ${commitSha}`] },
       }
     : await inferRepositoryCommands(job, project, inspection, workspacePath, dependencies, context);
+  const requestedOverrides = (job.params.overrides as Partial<RuntimeContract>) ?? {};
+  const inferredDeployment = deploymentContractFromInference(commandInference, inspection);
   const generateRuntimeContract = job.params.generateRuntimeContract !== false;
   const contract = generateRuntimeContract
     ? createRuntimeContract(project, inspection, {
-        ...((job.params.overrides as Partial<RuntimeContract>) ?? {}),
+        ...requestedOverrides,
         automationMode,
         commandInference,
-        database: databaseContractFromInference(project, commandInference),
-        environmentConfig: environmentConfigFromInference(commandInference),
+        build: { ...inferredDeployment.build, ...requestedOverrides.build },
+        pm2: { ...inferredDeployment.pm2, ...requestedOverrides.pm2 } as RuntimeContract['pm2'],
+        database: { ...databaseContractFromInference(project, commandInference), ...requestedOverrides.database },
+        environmentConfig: { ...environmentConfigFromInference(commandInference), ...requestedOverrides.environmentConfig },
       } as Partial<RuntimeContract>)
     : undefined;
   return {
@@ -49,6 +53,53 @@ export async function executeRepoInspect(job: Job, dependencies: ExecutorDepende
 
 export async function executeRepoSync(job: Job, dependencies: ExecutorDependencies, context: JobExecutionContext) {
   return executeRepoDelivery(job, dependencies, false, context);
+}
+
+function deploymentContractFromInference(
+  commandInference: Record<string, unknown>,
+  inspection: ReturnType<typeof inspectRepository>,
+): {
+  build: Partial<RuntimeContract['build']>;
+  pm2: Partial<NonNullable<RuntimeContract['pm2']>>;
+} {
+  const runtimeContract = commandInference.runtimeContract && typeof commandInference.runtimeContract === 'object'
+    ? commandInference.runtimeContract as Record<string, unknown>
+    : {};
+  const frontendBuildCommand = stringValue(runtimeContract.frontendBuildCommand) || undefined;
+  const frontendDistDir = normalizeRepositoryRelativePath(stringValue(runtimeContract.frontendDistDir));
+  const serverBuildCommand = stringValue(runtimeContract.serverBuildCommand) || undefined;
+  const pm2StartCommand = productionPm2Command(stringValue(runtimeContract.pm2StartCommand), inspection);
+  return {
+    build: {
+      ...(serverBuildCommand ? { serverBuildCommand } : {}),
+      ...(frontendBuildCommand ? { frontendBuildCommand, ...(frontendDistDir ? { frontendDistDir } : {}) } : {}),
+    },
+    pm2: {
+      ...(pm2StartCommand ? { startCommand: pm2StartCommand } : {}),
+    },
+  };
+}
+
+function productionPm2Command(value: string, inspection: ReturnType<typeof inspectRepository>) {
+  const command = value.trim();
+  if (!command || looksLikeDevelopmentCommand(command)) return undefined;
+  const scriptName = command.match(/^(?:npm|pnpm|bun)\s+run\s+([^\s]+)$/)?.[1]
+    ?? command.match(/^yarn\s+(?:run\s+)?([^\s]+)$/)?.[1]
+    ?? (command === 'npm start' ? 'start' : undefined);
+  const scriptBody = scriptName ? inspection.scripts[scriptName] : undefined;
+  if (scriptName && !scriptBody) return undefined;
+  if (scriptBody && looksLikeDevelopmentCommand(scriptBody)) return undefined;
+  return command;
+}
+
+function looksLikeDevelopmentCommand(command: string) {
+  return /\b(?:development|dev|watch|nodemon|tsx\s+watch|ts-node-dev)\b/i.test(command);
+}
+
+function normalizeRepositoryRelativePath(value: string) {
+  const normalized = value.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  if (!normalized || normalized.startsWith('/') || /^[A-Za-z]:\//.test(normalized) || normalized.split('/').includes('..')) return undefined;
+  return normalized;
 }
 
 export async function executeRepoInstall(job: Job, dependencies: ExecutorDependencies, context: JobExecutionContext) {

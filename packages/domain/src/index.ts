@@ -379,6 +379,13 @@ export interface RuntimeContract {
             build?: string[];
             deploy?: string[];
         };
+        runtimeContract?: {
+            serverBuildCommand?: string;
+            frontendBuildCommand?: string;
+            frontendDistDir?: string;
+            pm2StartCommand?: string;
+            evidence?: Partial<Record<'serverBuildCommand' | 'frontendBuildCommand' | 'frontendDistDir' | 'pm2StartCommand', string[]>>;
+        };
         validation?: Array<{
             command: string;
             purpose?: string;
@@ -399,6 +406,7 @@ export interface RuntimeContract {
         installCommand: string;
         codegenCommands: string[];
         validationCommands: string[];
+        serverBuildCommand?: string;
         frontendBuildCommand?: string;
         frontendDistDir?: string;
     };
@@ -424,6 +432,16 @@ export interface RuntimeContract {
         startCommand: string;
         port?: number;
         envFile?: string;
+    };
+    commandApproval?: {
+        status: 'confirmed';
+        confirmedAt: string;
+        fields: {
+            serverBuildCommand: string | null;
+            frontendBuildCommand: string | null;
+            frontendDistDir: string | null;
+            pm2StartCommand: string | null;
+        };
     };
     network?: {
         authority: 'platform';
