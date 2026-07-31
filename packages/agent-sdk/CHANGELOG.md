@@ -1,5 +1,12 @@
 # @zhenfengxx/agent-sdk
 
+## 1.5.1
+
+### Patch Changes
+
+- Updated dependencies [bb6fa6d]
+  - @zhenfengxx/contracts@1.5.1
+
 ## 1.5.0
 
 ### Minor Changes

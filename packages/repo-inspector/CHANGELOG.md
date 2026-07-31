@@ -1,5 +1,13 @@
 # @zhenfengxx/repo-inspector
 
+## 1.5.1
+
+### Patch Changes
+
+- bb6fa6d: Infer and expose separately reviewable server build, frontend build, frontend artifact, and PM2 production start fields for Runtime Contracts.
+- Updated dependencies [bb6fa6d]
+  - @zhenfengxx/contracts@1.5.1
+
 ## 1.5.0
 
 ### Patch Changes
