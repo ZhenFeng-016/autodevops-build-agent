@@ -16,6 +16,12 @@ export interface JenkinsClientOptions {
   signal?: AbortSignal;
 }
 
+export type JenkinsParameterDefinition = {
+  name: string;
+  type: 'string' | 'password' | 'boolean';
+  description?: string;
+};
+
 export class JenkinsClient {
   constructor(private readonly options: JenkinsClientOptions) {}
 
@@ -58,28 +64,56 @@ export class JenkinsClient {
     return { queueUrl: response.headers.get('location') ?? '' };
   }
 
-  async upsertPipelineJob(jobName: string, jenkinsfile: string): Promise<void> {
-    const configXml = freestylePipelineConfig(jenkinsfile);
-    const createResponse = await fetch(`${this.options.baseUrl}/createItem?name=${encodeURIComponent(jobName)}`, {
-      method: 'POST',
-      headers: { ...(await this.requestHeaders('token')), 'Content-Type': 'application/xml' },
-      body: configXml,
-      signal: this.options.signal,
-    });
-    if (createResponse.status === 400 || createResponse.status === 409) {
-      const updateResponse = await fetch(`${this.options.baseUrl}/job/${encodeURIComponent(jobName)}/config.xml`, {
+  async upsertPipelineJob(jobName: string, jenkinsfile: string, parameterDefinitions: JenkinsParameterDefinition[]): Promise<void> {
+    const definitions = validateParameterDefinitions(parameterDefinitions);
+    const configXml = pipelineJobConfig(jenkinsfile, definitions);
+    const configUrl = `${this.options.baseUrl}/job/${encodeURIComponent(jobName)}/config.xml`;
+    const headers = { ...(await this.requestHeaders('token')), 'Content-Type': 'application/xml' };
+    const currentResponse = await fetch(configUrl, { headers, signal: this.options.signal });
+
+    if (currentResponse.status === 404) {
+      await currentResponse.text();
+      const createResponse = await fetch(`${this.options.baseUrl}/createItem?name=${encodeURIComponent(jobName)}`, {
         method: 'POST',
-        headers: { ...(await this.requestHeaders('token')), 'Content-Type': 'application/xml' },
+        headers,
         body: configXml,
         signal: this.options.signal,
       });
-      if (!updateResponse.ok) {
-        throw new Error(`Jenkins job update failed: ${updateResponse.status} ${await updateResponse.text()}`);
+      const createBody = await createResponse.text();
+      if (!createResponse.ok && createResponse.status !== 400 && createResponse.status !== 409) {
+        throw new Error(`Jenkins job create failed: ${createResponse.status} ${createBody}`);
       }
-      return;
+      if (!createResponse.ok) await this.updatePipelineJob(configUrl, configXml, headers);
+    } else if (currentResponse.ok) {
+      await currentResponse.text();
+      await this.updatePipelineJob(configUrl, configXml, headers);
+    } else {
+      throw new Error(`Jenkins job inspection failed: ${currentResponse.status} ${await currentResponse.text()}`);
     }
-    if (!createResponse.ok) {
-      throw new Error(`Jenkins job create failed: ${createResponse.status} ${await createResponse.text()}`);
+
+    await this.verifyPipelineJob(configUrl, definitions, headers);
+  }
+
+  private async updatePipelineJob(configUrl: string, configXml: string, headers: Record<string, string>) {
+    const response = await fetch(configUrl, {
+      method: 'POST',
+      headers,
+      body: configXml,
+      signal: this.options.signal,
+    });
+    if (!response.ok) throw new Error(`Jenkins job update failed: ${response.status} ${await response.text()}`);
+  }
+
+  private async verifyPipelineJob(configUrl: string, expected: JenkinsParameterDefinition[], headers: Record<string, string>) {
+    const response = await fetch(configUrl, { headers, signal: this.options.signal });
+    if (!response.ok) throw new Error(`Jenkins job verification failed: ${response.status} ${await response.text()}`);
+    const configXml = await response.text();
+    const actual = configuredParameterDefinitions(configXml);
+    const missing = expected.map((item) => item.name).filter((name) => !actual.has(name));
+    if (missing.length) throw new Error(`Jenkins job parameter verification failed; missing: ${missing.join(', ')}`);
+    const mismatched = expected.filter((item) => actual.get(item.name) !== item.type);
+    if (mismatched.length) {
+      throw new Error(`Jenkins job parameter type verification failed: ${mismatched.map((item) => `${item.name} expected ${item.type}, got ${actual.get(item.name)}`).join('; ')}`);
     }
   }
 
@@ -94,17 +128,18 @@ export class JenkinsClient {
   private async requestHeaders(mode: 'token' | 'password'): Promise<Record<string, string>> {
     const headers = this.authHeaders(mode);
     const crumb = await this.fetchCrumb(headers);
-    return crumb ? { ...headers, [crumb.field]: crumb.value } : headers;
+    return crumb ? { ...headers, [crumb.field]: crumb.value, ...(crumb.cookie ? { Cookie: crumb.cookie } : {}) } : headers;
   }
 
-  private async fetchCrumb(headers: Record<string, string>): Promise<{ field: string; value: string } | null> {
+  private async fetchCrumb(headers: Record<string, string>): Promise<{ field: string; value: string; cookie?: string } | null> {
     try {
       const response = await fetch(`${this.options.baseUrl}/crumbIssuer/api/json`, { headers, signal: this.options.signal });
       if (!response.ok) return null;
       const body = (await response.json()) as Record<string, unknown>;
       const field = stringValue(body.crumbRequestField);
       const value = stringValue(body.crumb);
-      return field && value ? { field, value } : null;
+      const cookie = response.headers.get('set-cookie')?.split(';', 1)[0];
+      return field && value ? { field, value, cookie } : null;
     } catch {
       return null;
     }
@@ -317,14 +352,73 @@ export function codexExecArgs(sandbox: 'read-only' | 'workspace-write') {
   return ['exec', '--sandbox', sandbox, '--ephemeral', '--skip-git-repo-check', '--color', 'never', '-'];
 }
 
-function freestylePipelineConfig(jenkinsfile: string): string {
+export function pipelineJobConfig(jenkinsfile: string, parameterDefinitions: JenkinsParameterDefinition[]): string {
+  const parameters = validateParameterDefinitions(parameterDefinitions).map(renderParameterDefinition).join('\n');
   return `<?xml version='1.1' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
+  <actions/>
+  <description>Managed by AutoDevOps. Manual changes may be overwritten.</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+${parameters}
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
   <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
     <script>${escapeXml(jenkinsfile)}</script>
     <sandbox>true</sandbox>
   </definition>
+  <disabled>false</disabled>
 </flow-definition>`;
+}
+
+function renderParameterDefinition(definition: JenkinsParameterDefinition) {
+  const name = escapeXml(definition.name);
+  const description = escapeXml(definition.description ?? 'Managed by AutoDevOps');
+  if (definition.type === 'password') {
+    return `        <hudson.model.PasswordParameterDefinition>
+          <name>${name}</name>
+          <description>${description}</description>
+          <defaultValue/>
+        </hudson.model.PasswordParameterDefinition>`;
+  }
+  if (definition.type === 'boolean') {
+    return `        <hudson.model.BooleanParameterDefinition>
+          <name>${name}</name>
+          <description>${description}</description>
+          <defaultValue>false</defaultValue>
+        </hudson.model.BooleanParameterDefinition>`;
+  }
+  return `        <hudson.model.StringParameterDefinition>
+          <name>${name}</name>
+          <description>${description}</description>
+          <defaultValue></defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>`;
+}
+
+function validateParameterDefinitions(definitions: JenkinsParameterDefinition[]) {
+  if (!definitions.length) throw new Error('Jenkins Pipeline jobs require at least one parameter definition');
+  const names = new Set<string>();
+  return definitions.map((definition) => {
+    const name = definition.name.trim();
+    if (!/^[A-Z][A-Z0-9_]*$/.test(name)) throw new Error(`Unsafe Jenkins parameter name: ${definition.name}`);
+    if (names.has(name)) throw new Error(`Duplicate Jenkins parameter definition: ${name}`);
+    names.add(name);
+    return { ...definition, name };
+  });
+}
+
+function configuredParameterDefinitions(configXml: string) {
+  const section = configXml.match(/<parameterDefinitions>([\s\S]*?)<\/parameterDefinitions>/)?.[1] ?? '';
+  const definitions = new Map<string, JenkinsParameterDefinition['type']>();
+  for (const match of section.matchAll(/<hudson\.model\.(String|Password|Boolean)ParameterDefinition>([\s\S]*?)<\/hudson\.model\.\1ParameterDefinition>/g)) {
+    const name = match[2].match(/<name>([A-Z][A-Z0-9_]*)<\/name>/)?.[1];
+    if (name) definitions.set(name, match[1].toLowerCase() as JenkinsParameterDefinition['type']);
+  }
+  return definitions;
 }
 
 function normalizeBuildStatus(value: string): JenkinsBuildWebhook['status'] {

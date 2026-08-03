@@ -1,4 +1,5 @@
 import { JenkinsClient } from '@autodevops/integrations';
+import type { JenkinsParameterDefinition } from '@autodevops/integrations';
 
 export type JenkinsRunInput = {
   baseUrl?: string;
@@ -7,6 +8,7 @@ export type JenkinsRunInput = {
   jobName: string;
   jenkinsfile?: string;
   parameters: Record<string, string>;
+  parameterDefinitions: JenkinsParameterDefinition[];
   signal?: AbortSignal;
 };
 
@@ -17,8 +19,8 @@ export interface JenkinsAdapter {
 export class SystemJenkinsAdapter implements JenkinsAdapter {
   async run(input: JenkinsRunInput) {
     if (!input.baseUrl) return { configured: false };
-    const client = new JenkinsClient({ baseUrl: input.baseUrl, username: input.username, apiToken: input.apiToken, signal: input.signal });
-    if (input.jenkinsfile) await client.upsertPipelineJob(input.jobName, input.jenkinsfile);
+    const client = new JenkinsClient({ baseUrl: input.baseUrl.replace(/\/+$/, ''), username: input.username, apiToken: input.apiToken, signal: input.signal });
+    if (input.jenkinsfile) await client.upsertPipelineJob(input.jobName, input.jenkinsfile, input.parameterDefinitions);
     const queue = await client.triggerBuild(input.jobName, input.parameters);
     return { configured: true, queueUrl: queue.queueUrl };
   }
