@@ -18,7 +18,10 @@ loads host configuration and composes `AgentRuntime` with these modules:
   branch/commit/merge operations.
 - `adapters/ssh.ts`: remote repository synchronization, installation, runtime
   cleanup, and BuildAgent-to-target SSH tests.
-- `adapters/jenkins.ts`: Jenkins pipeline execution.
+- `adapters/jenkins.ts`: idempotent Jenkins Pipeline configuration, parameter
+  verification, and build triggering. A deployment never uses an unparameterized
+  bootstrap build; the Agent writes and verifies the Job parameter contract
+  before calling `buildWithParameters`.
 - `adapters/codex.ts`: Codex incident analysis and patch generation.
 - `executors/*`: runtime-validated implementations of every protocol-v1 job.
 - `runtime.ts`: the register, heartbeat, claim, execute and complete/fail loop.
