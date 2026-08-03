@@ -1,5 +1,11 @@
 # @zhenfengxx/contracts
 
+## 1.5.2
+
+### Patch Changes
+
+- fb62b5c: Infer and expose separately reviewable server build, frontend build, frontend artifact, and PM2 production start fields for Runtime Contracts.
+
 ## 1.5.1
 
 ### Patch Changes
