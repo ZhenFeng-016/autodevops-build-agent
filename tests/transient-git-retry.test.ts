@@ -55,6 +55,12 @@ test('remote repository delivery retries sync and package-manager Git transport 
   assert.match(syncScript, /refs\/remotes\/origin\/\$branch/);
   assert.match(syncScript, /git checkout --detach "\$commit"/);
   assert.match(syncScript, /synced_commit:%s/);
+  const preCheckoutReset = syncScript.indexOf('git reset --hard HEAD');
+  const preCheckoutClean = syncScript.indexOf('git clean -fd', preCheckoutReset);
+  const checkout = syncScript.indexOf('git checkout --detach "$commit"');
+  assert.ok(preCheckoutReset > -1, 'managed workspaces discard tracked generator changes before checkout');
+  assert.ok(preCheckoutClean > preCheckoutReset, 'managed workspaces remove untracked checkout conflicts');
+  assert.ok(checkout > preCheckoutClean, 'workspace reconciliation happens before checkout');
   assert.doesNotMatch(syncScript, /git checkout "\$ref"/);
   assert.doesNotMatch(syncScript, /git reset --hard "\$ref"/);
   assert.match(installScript, /run_with_git_retry pnpm install/);
